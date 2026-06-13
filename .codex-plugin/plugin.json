@@ -1,0 +1,36 @@
+{
+  "name": "ourairports-mcp-server",
+  "version": "0.1.0",
+  "description": "Resolve airport codes (IATA/ICAO/GPS/local), search airports, find the nearest by coordinate, and look up runways, navaids, and radio frequencies from the bundled public-domain OurAirports dataset via MCP. STDIO or Streamable HTTP.",
+  "author": {
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads/ourairports-mcp-server#readme"
+  },
+  "homepage": "https://github.com/cyanheads/ourairports-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/ourairports-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "ourairports",
+    "aviation",
+    "airport",
+    "iata",
+    "icao",
+    "navaid",
+    "runway"
+  ],
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "ourairports-mcp-server",
+    "shortDescription": "Resolve airport codes (IATA/ICAO/GPS/local), search airports, find the nearest by coordinate, and look up runways, navaids, and radio frequencies from the bundled public-domain OurAirports dataset via MCP. STDIO or Streamable HTTP.",
+    "longDescription": "Static, offline aviation reference data from the public-domain OurAirports dataset — airports, runways, navaids, and radio frequencies. The dataset is bundled into the package and served from in-memory indices built at startup, so every tool is a local query with no API key, no rate limit, and no upstream dependency. Resolves any airport by a single code across IATA/ICAO/GPS/local/ident, ranks airports nearest-first to a coordinate by great-circle distance, and surfaces runways, navaids, and frequencies. Community-edited data — not authoritative for real flight operations.",
+    "developerName": "cyanheads",
+    "category": "data",
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/cyanheads/ourairports-mcp-server",
+    "defaultPrompt": []
+  }
+}
