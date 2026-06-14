@@ -1,9 +1,10 @@
 {
   "manifest_version": "0.3",
   "name": "ourairports-mcp-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Resolve airport codes (IATA/ICAO/GPS/local), search airports, find the nearest by coordinate, and look up runways, navaids, and radio frequencies from the bundled public-domain OurAirports dataset via MCP. STDIO or Streamable HTTP.",
   "author": { "name": "cyanheads" },
+  "repository": { "type": "git", "url": "https://github.com/cyanheads/ourairports-mcp-server" },
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",
