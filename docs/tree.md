@@ -1,6 +1,6 @@
 # ourairports-mcp-server - Directory Structure
 
-Generated on: 2026-06-13 18:14:06
+Generated on: 2026-06-20 17:53:59
 
 ```text
 ourairports-mcp-server/
@@ -28,6 +28,7 @@ ourairports-mcp-server/
 │   ├── build-changelog.ts
 │   ├── build-data.ts
 │   ├── build.ts
+│   ├── check-dependency-specifiers.ts
 │   ├── check-docs-sync.ts
 │   ├── check-framework-antipatterns.ts
 │   ├── check-skill-versions.ts

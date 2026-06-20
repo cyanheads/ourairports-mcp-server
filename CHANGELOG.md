@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-06-20
+
+mcp-ts-core ^0.10.6 → ^0.10.9 maintenance — adopts the check-dependency-specifiers and plugin-manifest devcheck guards, re-syncs framework skills + scripts, refreshes dev-deps. No server behavior change.
+
 ## [0.1.2](changelog/0.1.x/0.1.2.md) — 2026-06-15
 
 Add public hosted endpoint at https://ourairports.caseyjhand.com/mcp.
