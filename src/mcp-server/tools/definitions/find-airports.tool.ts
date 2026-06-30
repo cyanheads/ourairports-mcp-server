@@ -8,6 +8,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { getServerConfig } from '@/config/server-config.js';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
 import { AIRPORT_TYPES } from '@/services/airport-data/types.js';
 import { AirportSummarySchema, renderAirportLines, toAirportSummary } from './_schemas.js';
@@ -48,8 +49,10 @@ export const findAirportsTool = tool('ourairports_find_airports', {
       .int()
       .min(1)
       .max(50)
-      .default(10)
-      .describe('Maximum airports to return (1–50). Defaults to 10.'),
+      .optional()
+      .describe(
+        'Maximum airports to return (1–50). Defaults to OURAIRPORTS_DEFAULT_SEARCH_LIMIT (20).',
+      ),
   }),
 
   output: z.object({
@@ -84,11 +87,14 @@ export const findAirportsTool = tool('ourairports_find_airports', {
 
   handler(input, ctx) {
     const svc = getAirportDataService();
+    // Honor OURAIRPORTS_DEFAULT_SEARCH_LIMIT when limit is omitted, clamped to
+    // this tool's own max of 50 (the config ceiling is 100) (#4).
+    const limit = Math.min(input.limit ?? getServerConfig().defaultSearchLimit, 50);
     const hits = svc.nearbyAirports(
       input.latitude,
       input.longitude,
       input.radius_km,
-      input.limit,
+      limit,
       input.type,
       input.include_closed,
     );

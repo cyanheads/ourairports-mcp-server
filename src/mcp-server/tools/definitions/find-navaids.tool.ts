@@ -122,7 +122,9 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
   },
 
   handler(input, ctx) {
-    const limit = input.limit ?? getServerConfig().defaultSearchLimit;
+    // Clamp the config-derived default to this tool's own max of 50 (the config
+    // ceiling is 100), aligning with find_airports (#4).
+    const limit = Math.min(input.limit ?? getServerConfig().defaultSearchLimit, 50);
     const svc = getAirportDataService();
 
     const hasCoord = input.latitude !== undefined && input.longitude !== undefined;

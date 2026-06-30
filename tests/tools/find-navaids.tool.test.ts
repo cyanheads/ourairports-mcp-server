@@ -15,6 +15,16 @@ vi.mock('@/services/airport-data/airport-data-service.js', async (orig) => {
   return { ...actual, getAirportDataService: () => svc };
 });
 
+// Controllable OURAIRPORTS_DEFAULT_SEARCH_LIMIT for the #4 clamp test.
+const cfg = vi.hoisted(() => ({ defaultSearchLimit: 20 }));
+vi.mock('@/config/server-config.js', async (orig) => {
+  const actual = await orig<typeof import('@/config/server-config.js')>();
+  return {
+    ...actual,
+    getServerConfig: () => ({ dataDir: undefined, defaultSearchLimit: cfg.defaultSearchLimit }),
+  };
+});
+
 const { findNavaidsTool } = await import('@/mcp-server/tools/definitions/find-navaids.tool.js');
 
 /** Context wired with the tool's error contract so ctx.fail is typed/available. */
@@ -98,5 +108,19 @@ describe('findNavaidsTool', () => {
       ctx,
     );
     expect(result.navaids.every((n) => n.type === 'NDB')).toBe(true);
+  });
+
+  // Regression for #4: the config-derived default is clamped to the tool's own
+  // max of 50 (the config ceiling is 100), aligning with find_airports.
+  it('clamps a configured default above the tool max down to 50', async () => {
+    cfg.defaultSearchLimit = 80;
+    const spy = vi.spyOn(svc, 'nearbyNavaids');
+    await findNavaidsTool.handler(
+      findNavaidsTool.input.parse({ latitude: 47.45, longitude: -122.31, radius_km: 200 }),
+      ctxWithContract(),
+    );
+    expect(spy.mock.calls[0]?.[3]).toBe(50); // 4th positional arg is limit
+    spy.mockRestore();
+    cfg.defaultSearchLimit = 20;
   });
 });
