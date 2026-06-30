@@ -230,7 +230,6 @@ export class AirportDataService {
       lons.push(lon);
       this.airportCoordIds.push(airport.id);
 
-      this.indexCodes(airport);
       this.indexTokens(airport);
 
       if (airport.type !== 'closed') {
@@ -249,6 +248,11 @@ export class AirportDataService {
       }
     }
 
+    // Code index is built AFTER all airports are loaded, in global priority
+    // passes — so a unique ident is never shadowed by an earlier row's national
+    // code (#2).
+    this.buildCodeIndex();
+
     // Pack coordinates into a single Float64Array, parallel to airportCoordIds.
     const coords = new Float64Array(lats.length * 2);
     for (let i = 0; i < lats.length; i++) {
@@ -258,19 +262,35 @@ export class AirportDataService {
     this.airportCoords = coords;
   }
 
-  /** Insert an airport's codes in priority order, never overwriting a claimed key. */
-  private indexCodes(airport: Airport): void {
+  /**
+   * Build the unified code index in GLOBAL priority passes: register every
+   * airport's `ident`, then every `icao_code`, then `iata_code`, `gps_code`,
+   * and `local_code` — each pass insert-if-absent over airports in CSV row
+   * order. Idents are globally unique, so pass 1 is collision-free and a unique
+   * ident can never be shadowed by an earlier-row airport's national (gps/local)
+   * code (#2). The previous per-airport loop claimed keys in row order, letting
+   * a low-priority `local_code` from an early row pre-empt a later row's
+   * high-priority `ident`.
+   *
+   * Ambiguity semantics are unchanged: a code claimed by one airport that also
+   * appears as any code of a *different* airport is flagged — the collision is
+   * simply caught in a later pass rather than at per-airport insert time.
+   */
+  private buildCodeIndex(): void {
     for (const { via, key } of CODE_PRIORITY) {
-      const raw = airport[key];
-      if (typeof raw !== 'string' || raw.length === 0) continue;
-      const upper = raw.toUpperCase();
-      if (this.codeIndex.has(upper)) {
-        // A different airport already claimed this code string in gps/local space.
-        if (this.codeIndex.get(upper) !== airport.id) this.ambiguousCodes.add(upper);
-        continue;
+      for (const airport of this.airportsById.values()) {
+        const raw = airport[key];
+        if (typeof raw !== 'string' || raw.length === 0) continue;
+        const upper = raw.toUpperCase();
+        const claimedBy = this.codeIndex.get(upper);
+        if (claimedBy !== undefined) {
+          // A different airport already claimed this string in a higher pass.
+          if (claimedBy !== airport.id) this.ambiguousCodes.add(upper);
+          continue;
+        }
+        this.codeIndex.set(upper, airport.id);
+        this.codeVia.set(upper, via);
       }
-      this.codeIndex.set(upper, airport.id);
-      this.codeVia.set(upper, via);
     }
   }
 
@@ -431,7 +451,15 @@ export class AirportDataService {
    * Ranks by a light relevance heuristic, then truncates to `limit`.
    */
   search(filters: SearchFilters): SearchResult {
-    const queryTokens = filters.query ? tokenize(filters.query) : [];
+    // A query of only stopwords/punctuation tokenizes to nothing. That is NOT
+    // the same as an omitted/blank query (which browses by facets): the caller
+    // supplied search intent that matched no searchable term, so return zero
+    // with a flag the tool turns into a "no searchable terms" notice (#3).
+    const hasQuery = filters.query !== undefined && filters.query.trim().length > 0;
+    const queryTokens = hasQuery ? tokenize(filters.query as string) : [];
+    if (hasQuery && queryTokens.length === 0) {
+      return { airports: [], totalMatched: 0, noSearchableTerms: true };
+    }
     const country = filters.country?.toUpperCase();
     const region = filters.region?.toUpperCase();
     const matched: { airport: Airport; score: number }[] = [];
@@ -586,11 +614,17 @@ export class AirportDataService {
   }
 }
 
-/** Token match allowing prefix hits (so "intl" matches "international"). */
+/**
+ * Token match allowing forward prefix hits: a query token matches an indexed
+ * token it is a prefix of (so "intern" matches "international"). The reverse
+ * direction is intentionally absent — a query token must NOT match a shorter
+ * indexed token that is merely a prefix of it, or a gibberish query like
+ * "xqzzywvu" would match any airport carrying a bare "x" token (#1).
+ */
 function hasTokenPrefix(haystack: Set<string>, needle: string): boolean {
   if (haystack.has(needle)) return true;
   for (const t of haystack) {
-    if (t.startsWith(needle) || needle.startsWith(t)) return true;
+    if (t.startsWith(needle)) return true;
   }
   return false;
 }

@@ -188,6 +188,12 @@ export interface SearchFilters {
 /** Result of an airport search — the hits plus the pre-limit total. */
 export interface SearchResult {
   airports: Airport[];
+  /**
+   * True when a non-blank `query` tokenized to nothing (only stopwords or
+   * punctuation) — distinct from a genuine zero-match. The tool surfaces a
+   * "no searchable terms" notice instead of the generic empty-result guidance.
+   */
+  noSearchableTerms?: boolean;
   totalMatched: number;
 }
 

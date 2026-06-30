@@ -46,6 +46,16 @@ describe('getAirportTool', () => {
     expect(result.resolutionNote).toMatch(/shared by more than one airport/);
   });
 
+  // #2: a globally-unique ident resolves to its own airport even when an earlier
+  // CSV row uses the same string as a gps/local code.
+  it('resolves a shadowed unique ident to its own airport (5MO → Plattsburg)', async () => {
+    const ctx = createMockContext();
+    const result = await getAirportTool.handler(getAirportTool.input.parse({ code: '5MO' }), ctx);
+    expect(result.airport.ident).toBe('5MO');
+    expect(result.airport.name).toBe('Plattsburg Airpark');
+    expect(result.resolvedVia).toBe('ident');
+  });
+
   it('trims related records via include', async () => {
     const ctx = createMockContext();
     const result = await getAirportTool.handler(

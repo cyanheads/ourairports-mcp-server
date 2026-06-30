@@ -81,6 +81,31 @@ describe('searchAirportsTool', () => {
     expect(getEnrichment(ctx)?.notice).toMatch(/No airports matched/);
   });
 
+  // #1: a gibberish query no longer false-matches via a short indexed token.
+  it('returns zero for a gibberish query that shares a leading letter with a short token', async () => {
+    const ctx = createMockContext();
+    const result = await searchAirportsTool.handler(
+      searchAirportsTool.input.parse({ query: 'bzzqxw' }),
+      ctx,
+    );
+    expect(result.airports).toHaveLength(0);
+  });
+
+  // #3: a non-blank query of only stopwords/punctuation gets a distinct
+  // "no searchable terms" notice rather than the whole corpus or the generic
+  // no-match guidance.
+  it('emits the no-searchable-terms notice for a stopword-only query', async () => {
+    const ctx = createMockContext();
+    const result = await searchAirportsTool.handler(
+      searchAirportsTool.input.parse({ query: 'the' }),
+      ctx,
+    );
+    expect(result.airports).toHaveLength(0);
+    expect(getEnrichment(ctx)?.notice).toMatch(/no searchable terms/i);
+    const effective = searchAirportsTool.output.extend(searchAirportsTool.enrichment);
+    expect(effective.safeParse({ ...result, ...getEnrichment(ctx) }).success).toBe(true);
+  });
+
   it('excludes closed airports by default', async () => {
     const ctx = createMockContext();
     const result = await searchAirportsTool.handler(

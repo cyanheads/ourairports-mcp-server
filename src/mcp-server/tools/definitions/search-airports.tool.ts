@@ -107,7 +107,12 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
       });
     }
 
-    if (result.totalMatched === 0) {
+    if (result.noSearchableTerms) {
+      ctx.enrich.notice(
+        `The query "${input.query}" contains no searchable terms — only common words (the, of, and) or punctuation, which the index drops. ` +
+          'Provide a distinctive word from the airport name or municipality, or omit query and filter by country/region/type.',
+      );
+    } else if (result.totalMatched === 0) {
       const facets = [
         input.country ? `country=${input.country}` : null,
         input.region ? `region=${input.region}` : null,

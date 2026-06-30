@@ -75,6 +75,35 @@ describe('code resolution across identifier spaces', () => {
     expect(svc.resolveByCode('JFK')?.ambiguous).toBe(false);
     expect(svc.resolveByCode('KJFK')?.ambiguous).toBe(false);
   });
+
+  // Regression for #2: a globally-unique ident must never be shadowed by an
+  // EARLIER CSV row's gps/local code. The fixture seeds three shadow pairs where
+  // the earlier row claims the string in national-code space; global priority
+  // passes register every ident before any national code, so the ident-owner
+  // wins while the collision is still flagged ambiguous.
+  it('resolves 5MO to its ident-owner (Plattsburg), not the local_code shadow (Applegate, 15MO)', () => {
+    const r = svc.resolveByCode('5MO');
+    expect(r?.airport.ident).toBe('5MO');
+    expect(r?.airport.name).toBe('Plattsburg Airpark');
+    expect(r?.resolvedVia).toBe('ident');
+    expect(r?.ambiguous).toBe(true); // 15MO still carries 5MO as its local_code
+  });
+
+  it('resolves 1A8 to its ident-owner (Empire), not the gps_code shadow (Goldfield, 0L5)', () => {
+    const r = svc.resolveByCode('1A8');
+    expect(r?.airport.ident).toBe('1A8');
+    expect(r?.airport.name).toBe('Empire Airport');
+    expect(r?.resolvedVia).toBe('ident');
+    expect(r?.ambiguous).toBe(true);
+  });
+
+  it('resolves ERT to its ident-owner (Erdenet), not the local_code shadow (Estancia, AR-0143)', () => {
+    const r = svc.resolveByCode('ERT');
+    expect(r?.airport.ident).toBe('ERT');
+    expect(r?.airport.name).toBe('Erdenet Airport');
+    expect(r?.resolvedVia).toBe('ident');
+    expect(r?.ambiguous).toBe(true);
+  });
 });
 
 describe('runway and frequency joins', () => {
@@ -177,8 +206,9 @@ describe('listCountries', () => {
     const us = countries.find((c) => c.code === 'US');
     expect(us).toBeDefined();
     expect(us?.name).toBe('United States');
-    // Non-closed US airports in the fixture: KSEA, KJFK, 00AA, 00AK, USHBE, KBFI = 6 (CLOSEDX excluded).
-    expect(us?.airportCount).toBe(6);
+    // Non-closed US airports in the fixture: KSEA, KJFK, 00AA, 00AK, USHBE, KBFI,
+    // 15MO, 5MO, 0L5, 1A8 = 10 (CLOSEDX excluded; the four code-shadowing rows are US).
+    expect(us?.airportCount).toBe(10);
     expect(us?.regions).toBeUndefined();
   });
 
@@ -234,6 +264,42 @@ describe('search', () => {
     const res = svc.search({ query: 'nonexistentplacename', includeClosed: false, limit: 20 });
     expect(res.airports).toHaveLength(0);
     expect(res.totalMatched).toBe(0);
+  });
+
+  // Regression for #1: a query token must not match a SHORTER indexed token it
+  // merely starts with. "Aero B Ranch Airport" (00AA) contributes a bare "b"
+  // token; before the fix, "bzzqxw".startsWith("b") falsely matched it.
+  it('does not false-match a gibberish query via a short indexed token (#1)', () => {
+    const res = svc.search({ query: 'bzzqxw', includeClosed: false, limit: 20 });
+    expect(res.airports).toHaveLength(0);
+    expect(res.totalMatched).toBe(0);
+  });
+
+  it('still matches a real forward prefix (intended direction kept)', () => {
+    // "seatt" is a prefix of the indexed token "seattle".
+    const res = svc.search({ query: 'seatt', includeClosed: false, limit: 20 });
+    expect(res.airports.some((a) => a.ident === 'KSEA')).toBe(true);
+  });
+
+  // Regression for #3: a non-blank query that tokenizes to nothing (only
+  // stopwords or punctuation) returns zero with the noSearchableTerms flag —
+  // distinct from an omitted/blank query, which browses by facets.
+  it('flags a non-blank query that tokenizes to nothing (#3)', () => {
+    for (const query of ['the', '!!!', 'the of and']) {
+      const res = svc.search({ query, includeClosed: false, limit: 20 });
+      expect(res.airports).toHaveLength(0);
+      expect(res.totalMatched).toBe(0);
+      expect(res.noSearchableTerms).toBe(true);
+    }
+  });
+
+  it('browses by facets when query is omitted or whitespace-only (not flagged) (#3)', () => {
+    const omitted = svc.search({ includeClosed: false, limit: 20 });
+    expect(omitted.totalMatched).toBeGreaterThan(1);
+    expect(omitted.noSearchableTerms).toBeUndefined();
+    const blank = svc.search({ query: '   ', includeClosed: false, limit: 20 });
+    expect(blank.totalMatched).toBeGreaterThan(1);
+    expect(blank.noSearchableTerms).toBeUndefined();
   });
 });
 

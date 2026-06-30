@@ -21,7 +21,7 @@ describe('listCountriesTool', () => {
     const ctx = createMockContext();
     const result = await listCountriesTool.handler(listCountriesTool.input.parse({}), ctx);
     const us = result.countries.find((c) => c.code === 'US');
-    expect(us?.airportCount).toBe(6);
+    expect(us?.airportCount).toBe(10);
     expect(us?.regions).toBeUndefined();
     expect((getEnrichment(ctx)?.totalCount as number) > 0).toBe(true);
   });
