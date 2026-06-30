@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-30 · 🛡️ Security
+
+Search and lookup fixes: forward-only token-prefix matching, an ident-priority code index, and a distinct no-searchable-terms notice; find_airports and find_navaids now honor OURAIRPORTS_DEFAULT_SEARCH_LIMIT clamped to 50. Clears a medium-severity transitive js-yaml DoS advisory and refreshes framework + dev-deps.
+
 ## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-06-20
 
 mcp-ts-core ^0.10.6 → ^0.10.9 maintenance — adopts the check-dependency-specifiers and plugin-manifest devcheck guards, re-syncs framework skills + scripts, refreshes dev-deps. No server behavior change.
