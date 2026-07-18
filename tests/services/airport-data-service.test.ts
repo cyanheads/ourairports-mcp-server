@@ -190,16 +190,6 @@ describe('navaids', () => {
   });
 });
 
-describe('resolveAirportIdent', () => {
-  it('returns the ident for a valid code', () => {
-    expect(svc.resolveAirportIdent('SEA').ident).toBe('KSEA');
-  });
-
-  it('throws notFound (unknown_code) for an invalid code', () => {
-    expect(() => svc.resolveAirportIdent('ZZZZ')).toThrowError(/No airport found/);
-  });
-});
-
 describe('listCountries', () => {
   it('lists countries with airport counts, sorted by name', () => {
     const countries = svc.listCountries(undefined, false);

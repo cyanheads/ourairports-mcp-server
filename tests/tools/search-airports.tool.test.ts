@@ -124,6 +124,32 @@ describe('searchAirportsTool', () => {
     expect(result.airports.every((a) => a.isoRegion === 'US-WA')).toBe(true);
   });
 
+  // #7: country/region facets are trimmed before lookup; a padded facet matches
+  // the same airports as the unpadded form, and a blank facet is rejected.
+  it('matches a padded country facet by trimming (" US ")', async () => {
+    const ctx = createMockContext();
+    const result = await searchAirportsTool.handler(
+      searchAirportsTool.input.parse({ query: 'seattle', country: ' US ', limit: 1 }),
+      ctx,
+    );
+    expect(result.airports).toHaveLength(1);
+    expect(result.airports[0]?.ident).toBe('KSEA');
+  });
+
+  it('matches a padded region facet by trimming (" US-WA ")', async () => {
+    const ctx = createMockContext();
+    const result = await searchAirportsTool.handler(
+      searchAirportsTool.input.parse({ query: 'seattle', region: ' US-WA ' }),
+      ctx,
+    );
+    expect(result.airports.every((a) => a.isoRegion === 'US-WA')).toBe(true);
+    expect(result.airports.some((a) => a.ident === 'KSEA')).toBe(true);
+  });
+
+  it('rejects a whitespace-only country facet at schema validation', () => {
+    expect(() => searchAirportsTool.input.parse({ country: '   ' })).toThrow();
+  });
+
   it('defaults limit from config when omitted', () => {
     const input = searchAirportsTool.input.parse({ query: 'x' });
     expect(input.limit).toBeUndefined(); // resolved in handler, not schema

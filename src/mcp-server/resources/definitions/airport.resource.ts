@@ -41,9 +41,10 @@ export const airportResource = resource('airport://{code}', {
   params: z.object({
     code: z
       .string()
+      .trim()
       .min(1)
       .describe(
-        'Any airport code: IATA (SEA), ICAO (KSEA), GPS, national/local, or the OurAirports ident. Case-insensitive.',
+        'Any airport code: IATA (SEA), ICAO (KSEA), GPS, national/local, or the OurAirports ident. Case-insensitive; surrounding whitespace is ignored.',
       ),
   }),
 

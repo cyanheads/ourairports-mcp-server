@@ -16,7 +16,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
 import { logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { bool, compact, int, num, parseCsv, reqInt, reqStr, str } from './csv.js';
@@ -556,22 +555,6 @@ export class AirportDataService {
     const all = this.navaidsByAirportIdent.get(ident.toUpperCase()) ?? [];
     const filtered = type ? all.filter((n) => n.type === type) : all;
     return filtered.slice(0, limit);
-  }
-
-  /**
-   * Resolve an airport from a code, returning its `ident` (the navaid join key)
-   * — used by `find_navaids` airport mode. Throws `notFound` (→ `unknown_code`)
-   * when the code matches nothing.
-   */
-  resolveAirportIdent(code: string): { ident: string; airport: Airport } {
-    const resolution = this.resolveByCode(code);
-    if (!resolution) {
-      throw notFound(
-        `No airport found for code "${code}". Try ourairports_search_airports with a partial name or municipality to discover the right code.`,
-        { reason: 'unknown_code', code },
-      );
-    }
-    return { ident: resolution.airport.ident, airport: resolution.airport };
   }
 
   /**

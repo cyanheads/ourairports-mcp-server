@@ -27,14 +27,20 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
       ),
     country: z
       .string()
+      .trim()
+      .min(1)
       .optional()
       .describe(
-        'ISO 3166-1 alpha-2 country code filter (e.g. US). Exact match. Discover codes with ourairports_list_countries.',
+        'ISO 3166-1 alpha-2 country code filter (e.g. US). Exact match, case-insensitive; surrounding whitespace is ignored. Discover codes with ourairports_list_countries.',
       ),
     region: z
       .string()
+      .trim()
+      .min(1)
       .optional()
-      .describe('ISO 3166-2 region code filter (e.g. US-WA). Exact match.'),
+      .describe(
+        'ISO 3166-2 region code filter (e.g. US-WA). Exact match, case-insensitive; surrounding whitespace is ignored.',
+      ),
     type: z
       .enum(AIRPORT_TYPES)
       .optional()

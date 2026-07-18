@@ -56,14 +56,63 @@ describe('getAirportTool', () => {
     expect(result.resolvedVia).toBe('ident');
   });
 
-  it('trims related records via include', async () => {
+  // #5: `include` selection is echoed via the `included` output field, and
+  // format() distinguishes an omitted relation ("not requested") from a
+  // genuinely empty one ("None recorded").
+  it('include default returns both relations and lists them in `included`', async () => {
+    const ctx = createMockContext();
+    const result = await getAirportTool.handler(getAirportTool.input.parse({ code: 'KSEA' }), ctx);
+    expect(result.included).toEqual(['runways', 'frequencies']);
+    expect(result.runways.length).toBe(2);
+    expect(result.frequencies.length).toBeGreaterThanOrEqual(3);
+    const text = (getAirportTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    expect(text).toContain('**Included:** runways, frequencies');
+    expect(text).not.toContain('Not requested');
+    expect(text).not.toContain('None recorded');
+  });
+
+  it('include ["runways"] omits frequencies and labels the section "not requested", not "None recorded"', async () => {
     const ctx = createMockContext();
     const result = await getAirportTool.handler(
       getAirportTool.input.parse({ code: 'KSEA', include: ['runways'] }),
       ctx,
     );
+    expect(result.included).toEqual(['runways']);
     expect(result.runways.length).toBe(2);
     expect(result.frequencies).toEqual([]);
+    const text = (getAirportTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    // KSEA HAS frequencies — omitting them must not read as "None recorded".
+    expect(text).toMatch(/### Frequencies\n_Not requested/);
+    expect(text).not.toContain('### Frequencies (0)');
+    expect(text).toContain('16L'); // runways still rendered
+  });
+
+  it('include [] omits both relations (neither shown as "None recorded")', async () => {
+    const ctx = createMockContext();
+    const result = await getAirportTool.handler(
+      getAirportTool.input.parse({ code: 'KSEA', include: [] }),
+      ctx,
+    );
+    expect(result.included).toEqual([]);
+    expect(result.runways).toEqual([]);
+    expect(result.frequencies).toEqual([]);
+    const text = (getAirportTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    expect(text).toContain('**Included:** none');
+    expect(text).not.toContain('None recorded');
+    expect(text.match(/_Not requested/g)?.length).toBe(2);
+  });
+
+  it('a requested relation with no records still reads "None recorded" (00AA has no frequencies)', async () => {
+    const ctx = createMockContext();
+    const result = await getAirportTool.handler(
+      getAirportTool.input.parse({ code: '00AA', include: ['frequencies'] }),
+      ctx,
+    );
+    expect(result.included).toEqual(['frequencies']);
+    expect(result.frequencies).toEqual([]);
+    const text = (getAirportTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    expect(text).toMatch(/### Frequencies \(0\)\n_None recorded\._/);
+    expect(text).toMatch(/### Runways\n_Not requested/); // runways not requested here
   });
 
   it('throws unknown_code for an unknown code', () => {
@@ -80,5 +129,20 @@ describe('getAirportTool', () => {
     expect(text).toContain('Seattle Tacoma International Airport');
     expect(text).toContain('16L');
     expect(text).toContain('119.9 MHz');
+  });
+
+  // #7: code is trimmed before lookup; a padded code resolves, and a
+  // whitespace-only code fails schema validation rather than becoming unknown_code.
+  it('resolves a padded code by trimming ("  SEA  " → KSEA)', async () => {
+    const ctx = createMockContext();
+    const result = await getAirportTool.handler(
+      getAirportTool.input.parse({ code: '  SEA  ' }),
+      ctx,
+    );
+    expect(result.airport.ident).toBe('KSEA');
+  });
+
+  it('rejects a whitespace-only code at schema validation, not as unknown_code', () => {
+    expect(() => getAirportTool.input.parse({ code: '   ' })).toThrow();
   });
 });

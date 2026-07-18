@@ -5,6 +5,7 @@
  * @module tests/tools/find-navaids.tool.test
  */
 
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
@@ -67,11 +68,24 @@ describe('findNavaidsTool', () => {
     expect(getEnrichment(ctx)?.notice).toMatch(/no associated navaids/);
   });
 
-  it('throws unknown_code in airport mode for an invalid code', () => {
+  // #6: the airport-mode miss now throws via ctx.fail('unknown_code', …) at the
+  // tool boundary, so the declared recovery hint reaches data.recovery.hint
+  // (previously the service threw notFound() and bypassed ctx.recoveryFor).
+  it('throws unknown_code with the declared recovery hint for an unknown airport code', () => {
     const ctx = ctxWithContract();
-    expect(() =>
-      findNavaidsTool.handler(findNavaidsTool.input.parse({ airport_code: 'ZZZZ' }), ctx),
-    ).toThrow(/No airport found/);
+    let thrown: unknown;
+    try {
+      findNavaidsTool.handler(findNavaidsTool.input.parse({ airport_code: 'ZZZZZZ' }), ctx);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(McpError);
+    const err = thrown as McpError;
+    expect(err.code).toBe(JsonRpcErrorCode.NotFound);
+    const data = err.data as { reason?: string; code?: string; recovery?: { hint?: string } };
+    expect(data.reason).toBe('unknown_code');
+    expect(data.code).toBe('ZZZZZZ');
+    expect(data.recovery?.hint).toMatch(/ourairports_search_airports|ourairports_get_airport/);
   });
 
   it('throws mode_conflict when both modes supplied', () => {
@@ -94,6 +108,23 @@ describe('findNavaidsTool', () => {
     expect(() =>
       findNavaidsTool.handler(findNavaidsTool.input.parse({ latitude: 47 }), ctx),
     ).toThrow();
+  });
+
+  // #7: airport_code is trimmed before lookup; a padded code selects airport mode.
+  it('resolves a padded airport_code by trimming ("  KSEA  ")', async () => {
+    const ctx = ctxWithContract();
+    const result = await findNavaidsTool.handler(
+      findNavaidsTool.input.parse({ airport_code: '  KSEA  ' }),
+      ctx,
+    );
+    expect(result.mode).toBe('airport');
+    expect(result.airportIdent).toBe('KSEA');
+  });
+
+  // #7: whitespace-only airport_code is now a schema validation failure — it no
+  // longer falls through to mode_conflict.
+  it('rejects a whitespace-only airport_code at schema validation, not as mode_conflict', () => {
+    expect(() => findNavaidsTool.input.parse({ airport_code: '   ' })).toThrow();
   });
 
   it('filters by navaid type in coordinate mode', async () => {

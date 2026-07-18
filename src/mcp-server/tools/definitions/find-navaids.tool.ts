@@ -62,9 +62,11 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
       ),
     airport_code: z
       .string()
+      .trim()
+      .min(1)
       .optional()
       .describe(
-        'Airport mode: any airport code (IATA/ICAO/GPS/local/ident); returns the navaids serving that airport. Mutually exclusive with latitude/longitude.',
+        'Airport mode: any airport code (IATA/ICAO/GPS/local/ident); returns the navaids serving that airport. Case-insensitive; surrounding whitespace is ignored. Mutually exclusive with latitude/longitude.',
       ),
     type: z
       .enum(NAVAID_TYPES)
@@ -129,7 +131,9 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
 
     const hasCoord = input.latitude !== undefined && input.longitude !== undefined;
     const hasPartialCoord = input.latitude !== undefined || input.longitude !== undefined;
-    const hasAirport = input.airport_code !== undefined && input.airport_code.trim() !== '';
+    // Schema trims and rejects blank airport_code, so presence alone selects
+    // airport mode — whitespace can no longer fall through to mode_conflict (#7).
+    const hasAirport = input.airport_code !== undefined;
 
     // Exactly one mode. A lone latitude or longitude is also a conflict.
     if (hasAirport === hasCoord || (hasPartialCoord && !hasCoord)) {
@@ -162,9 +166,19 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
       };
     }
 
-    // Airport mode — resolve the code first (throws unknown_code if no match),
+    // Airport mode — resolve the code at the tool boundary so an unknown code
+    // carries the declared unknown_code recovery hint (mirrors get_airport),
     // then look up associated navaids. "Found but no navaids" is an empty list.
-    const { ident, airport } = svc.resolveAirportIdent(input.airport_code as string);
+    const code = input.airport_code as string;
+    const resolution = svc.resolveByCode(code);
+    if (!resolution) {
+      throw ctx.fail('unknown_code', `No airport found for code "${code}".`, {
+        code,
+        ...ctx.recoveryFor('unknown_code'),
+      });
+    }
+    const { airport } = resolution;
+    const ident = airport.ident;
     const navaids = svc.navaidsForAirport(ident, input.type, limit);
     ctx.enrich.total(navaids.length);
     if (navaids.length === 0) {

@@ -32,4 +32,17 @@ describe('airportResource', () => {
     const params = airportResource.params.parse({ code: 'ZZZZ' });
     expect(() => airportResource.handler(params, ctx)).toThrow(/No airport found/);
   });
+
+  // #7: code is trimmed before lookup; a padded code resolves and a
+  // whitespace-only code fails schema validation.
+  it('resolves a padded code by trimming ("  ksea  ")', async () => {
+    const ctx = createMockContext();
+    const params = airportResource.params.parse({ code: '  ksea  ' });
+    const result = await airportResource.handler(params, ctx);
+    expect(result.airport.ident).toBe('KSEA');
+  });
+
+  it('rejects a whitespace-only code at schema validation', () => {
+    expect(() => airportResource.params.parse({ code: '   ' })).toThrow();
+  });
 });
