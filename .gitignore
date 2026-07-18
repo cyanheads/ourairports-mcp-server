@@ -70,7 +70,8 @@ worker-configuration.d.ts
 # =============================================================================
 .storage/
 repomix-output*
-data/
+# Root-anchored: ignore the built production data bundle, NOT tests/fixtures/data (hand-curated test fixtures must be tracked so the suite runs from a clean clone).
+/data/
 docs/api/
 docs/devdocs.md
 .mcp.json

@@ -1,0 +1,6 @@
+"id","airport_ref","airport_ident","type","description","frequency_mhz"
+67890,3577,"KSEA","TWR","Seattle Tower",119.9
+67891,3577,"KSEA","ATIS","Seattle ATIS",118.0
+67892,3577,"KSEA","GND","Seattle Ground",121.7
+67900,3878,"KJFK","TWR","Kennedy Tower",119.1
+67950,800001,"KBFI","TWR","Boeing Tower",118.3

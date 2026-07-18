@@ -1,0 +1,6 @@
+"id","filename","ident","name","type","frequency_khz","latitude_deg","longitude_deg","elevation_ft","iso_country","dme_frequency_khz","dme_channel","dme_latitude_deg","dme_longitude_deg","dme_elevation_ft","slaved_variation_deg","magnetic_variation_deg","usageType","power","associated_airport"
+87123,"SEA_US","SEA","SEATTLE","VORTAC",116800,47.435372,-122.309608,425,"US",116800,"115X",47.435372,-122.309608,425,18.5,16.123,"BOTH","HIGH","KSEA"
+87124,"PAE_US","PAE","PAINE","VOR-DME",114200,47.92155,-122.279167,600,"US",114200,"89X",47.92155,-122.279167,600,18.0,16.0,"BOTH","HIGH","KBFI"
+87200,"NDLS_US","NDLS","NEEDLES ENROUTE","VOR",112900,40.0,-160.0,0,"US","","","","","","",16.0,"LO","HIGH",""
+87300,"JFK_US","JFK","KENNEDY","NDB",353,40.633,-73.778,13,"US","","","","","","",13.0,"TERMINAL","MEDIUM","KJFK"
+87400,"HND_SB","HND","HONIARA","DME",109300,-9.428,160.055,28,"SB",109300,"30X",-9.428,160.055,28,"",9.0,"BOTH","HIGH","AGGH"
