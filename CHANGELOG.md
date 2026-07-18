@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-07-18
+
+Adds `ourairports_search_runways` — cross-airport runway-attribute search over the bundled corpus by airport facets (country/region/type) and runway facets (surface, min length/width, lighting), one flat airport-plus-runway row per match (#8).
+
 ## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-07-18
 
 Definition fixes: get_airport gains an `included` field to disambiguate omitted vs empty relations (#5), find_navaids resolves unknown_code at the tool boundary with its recovery hint (#6), and code/facet inputs trim whitespace at the schema boundary (#7). Adopts mcp-ts-core ^0.10.14 with supply-chain install guards.

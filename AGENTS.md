@@ -1,7 +1,7 @@
 # Developer Protocol
 
 **Server:** ourairports-mcp-server
-**Version:** 0.1.5
+**Version:** 0.2.0
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.10.14`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
@@ -13,7 +13,7 @@
 
 ## What This Server Does
 
-Static, offline aviation reference data from the public-domain [OurAirports](https://ourairports.com/) dataset — airports, runways, navaids, radio frequencies. The six source CSVs are bundled into the package (and baked into the Docker image at build time via `scripts/build-data.ts`); the `airport-data` service parses them into in-memory indices once at `setup()`, and every tool is a local query. Zero runtime API: no key, no rate limit, no upstream to retry. The surface is five read-only tools plus the `airport://{code}` resource; no prompts. The architecture rationale (why in-memory indices over MirrorService/DataCanvas, the five-space code resolution, the haversine geo scan) lives in `docs/design.md` — read it before changing the service or adding a tool.
+Static, offline aviation reference data from the public-domain [OurAirports](https://ourairports.com/) dataset — airports, runways, navaids, radio frequencies. The six source CSVs are bundled into the package (and baked into the Docker image at build time via `scripts/build-data.ts`); the `airport-data` service parses them into in-memory indices once at `setup()`, and every tool is a local query. Zero runtime API: no key, no rate limit, no upstream to retry. The surface is six read-only tools plus the `airport://{code}` resource; no prompts. The architecture rationale (why in-memory indices over MirrorService/DataCanvas, the five-space code resolution, the haversine geo scan) lives in `docs/design.md` — read it before changing the service or adding a tool.
 
 ---
 
@@ -253,6 +253,7 @@ src/
     tools/definitions/
       _schemas.ts                       # Shared output schemas + domain→output mappers + renderers
       search-airports.tool.ts           # ourairports_search_airports
+      search-runways.tool.ts            # ourairports_search_runways
       get-airport.tool.ts               # ourairports_get_airport
       find-airports.tool.ts             # ourairports_find_airports
       find-navaids.tool.ts              # ourairports_find_navaids

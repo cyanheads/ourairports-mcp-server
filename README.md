@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/ourairports-mcp-server</h1>
   <p><b>Resolve airport codes (IATA/ICAO/GPS/local), search airports, find the nearest by coordinate, and look up runways, navaids, and radio frequencies from the bundled public-domain OurAirports dataset via MCP. STDIO or Streamable HTTP.</b>
-  <div>5 Tools • 1 Resource</div>
+  <div>6 Tools • 1 Resource</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -47,11 +47,12 @@ OurAirports is community-edited. The data is surfaced as-is and is **not authori
 
 ## Tools
 
-Five read-only tools, all local queries against the bundled index — code resolution and detail, search, coordinate grounding, navaids, and the country/region lookup table:
+Six read-only tools, all local queries against the bundled index — code resolution and detail, airport and runway search, coordinate grounding, navaids, and the country/region lookup table:
 
 | Tool | Description |
 |:---|:---|
 | `ourairports_search_airports` | Full-text and faceted search over the airport corpus by name, municipality, country, region, or type. Ranked summaries, closed airports excluded by default. |
+| `ourairports_search_runways` | Search runways across all airports by surface, length, width, and lighting, joined back to their airports and filtered by country, region, or airport type. One flat `{ airport, runway }` row per matching runway. |
 | `ourairports_get_airport` | Full record for one airport resolved by any code (IATA/ICAO/GPS/local/ident), with its runways and radio frequencies inline. |
 | `ourairports_find_airports` | Airports within a radius of a coordinate, ranked nearest-first by great-circle distance, with distance and bearing. |
 | `ourairports_find_navaids` | Navigation aids (VOR, VOR-DME, DME, NDB, NDB-DME, TACAN, VORTAC) near a coordinate or serving a specific airport. |
@@ -65,6 +66,19 @@ The common entry point — search by free text, facets, or both.
 - Faceted filters: `country` (ISO 3166-1 alpha-2), `region` (ISO 3166-2), and `type` — `country`/`region` are exact match, case-insensitive, with surrounding whitespace ignored
 - Closed airports excluded by default; opt in with `include_closed`
 - Results ranked operational/larger-airports-first, each with its full code set and coordinates for chaining into `ourairports_get_airport`
+- Truncation disclosure — total matched count, applied cap, and guidance to broaden or narrow
+
+---
+
+### `ourairports_search_runways`
+
+Cross-airport runway search — the counterpart to `ourairports_get_airport`, which lists runways for one already-known airport.
+
+- Airport facets (`country`, `region`, `type`) narrow the airports first; runway facets (`surface`, `min_length_ft`, `min_width_ft`, `lighted`) then filter their runways
+- `surface` is a case-insensitive substring match against the raw upstream surface string (no controlled vocabulary — a shorter fragment like `asp` matches ASP, ASPH, and Asphalt), not an exact code
+- Returns one flat `{ airport, runway }` row per matching runway — an airport with three matching runways contributes three rows
+- A runway whose length or width is unknown is excluded when the matching `min_*_ft` filter is set — never assumed to meet a threshold the data can't confirm
+- Closed airports and closed runways are both excluded unless `include_closed_airports` / `include_closed_runways` is set
 - Truncation disclosure — total matched count, applied cap, and guidance to broaden or narrow
 
 ---
@@ -310,7 +324,7 @@ The build stage runs `bun run build:data` so the dataset is fetched and baked in
 |:---|:---|
 | `src/index.ts` | `createApp()` entry point — registers tools/resources and loads the bundled index at `setup()`. |
 | `src/config` | Server-specific environment variable parsing and validation with Zod. |
-| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Five read-only airport/navaid tools. |
+| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Six read-only airport/runway/navaid tools. |
 | `src/mcp-server/resources` | Resource definitions. The `airport://{code}` record. |
 | `src/services/airport-data` | The bundled-data service — CSV parsing, in-memory indices, code resolution, search, and the haversine geo scan. |
 | `scripts/build-data.ts` | Build-time fetcher that bundles the six OurAirports CSVs into `data/`. |
