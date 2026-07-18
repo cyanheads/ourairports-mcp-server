@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * @fileoverview ourairports-mcp-server entry point. Builds the bundled
- * OurAirports indices once at setup() and serves five read-only lookup/geo
+ * OurAirports indices once at setup() and serves six read-only lookup/geo
  * tools plus the airport:// resource against them — zero runtime API.
  * @module index
  */

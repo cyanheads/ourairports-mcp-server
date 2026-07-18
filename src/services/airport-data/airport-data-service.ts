@@ -34,6 +34,9 @@ import type {
   RegionSummary,
   ResolvedVia,
   Runway,
+  RunwayMatch,
+  RunwaySearchFilters,
+  RunwaySearchResult,
   SearchFilters,
   SearchResult,
 } from './types.js';
@@ -484,6 +487,56 @@ export class AirportDataService {
       airports: matched.slice(0, filters.limit).map((m) => m.airport),
       totalMatched: matched.length,
     };
+  }
+
+  /**
+   * Runway-attribute search across the whole corpus, joined back to airports.
+   * Mirrors `search()`'s airport-first filter order: airport-level facets
+   * (country/region/type, closed airports excluded unless opted in) narrow the
+   * airport set first, then each surviving airport's runways are filtered by
+   * surface (case-insensitive substring), min length/width, lighting, and the
+   * closed-runway flag. Emits flat `{ airport, runway }` rows — one per matching
+   * runway — collected in full for the pre-limit total, then capped at `limit`.
+   *
+   * Sparse thresholds exclude: when `minLengthFt`/`minWidthFt` is set, a runway
+   * with an unknown value for that field is dropped, never assumed to pass — the
+   * server can't claim a runway meets a threshold it has no data for.
+   */
+  searchRunways(filters: RunwaySearchFilters): RunwaySearchResult {
+    const country = filters.country?.toUpperCase();
+    const region = filters.region?.toUpperCase();
+    const surface = filters.surface?.trim().toLowerCase();
+    const matches: RunwayMatch[] = [];
+
+    for (const airport of this.airportsById.values()) {
+      if (!filters.includeClosedAirports && airport.type === 'closed') continue;
+      if (filters.type && airport.type !== filters.type) continue;
+      if (country && airport.isoCountry?.toUpperCase() !== country) continue;
+      if (region && airport.isoRegion?.toUpperCase() !== region) continue;
+
+      const runways = this.runwaysByAirportRef.get(airport.id);
+      if (!runways) continue;
+
+      for (const runway of runways) {
+        if (!filters.includeClosedRunways && runway.closed) continue;
+        if (filters.lighted !== undefined && runway.lighted !== filters.lighted) continue;
+        if (
+          filters.minLengthFt !== undefined &&
+          (runway.lengthFt === undefined || runway.lengthFt < filters.minLengthFt)
+        )
+          continue;
+        if (
+          filters.minWidthFt !== undefined &&
+          (runway.widthFt === undefined || runway.widthFt < filters.minWidthFt)
+        )
+          continue;
+        if (surface !== undefined && !runway.surface?.trim().toLowerCase().includes(surface))
+          continue;
+        matches.push({ airport, runway });
+      }
+    }
+
+    return { matches: matches.slice(0, filters.limit), totalMatched: matches.length };
   }
 
   /**

@@ -197,6 +197,41 @@ export interface SearchResult {
   totalMatched: number;
 }
 
+/**
+ * Filters accepted by the runway-attribute search. Airport-level facets
+ * (country/region/type/includeClosedAirports) narrow the airport set first;
+ * runway-level facets (surface/minLengthFt/minWidthFt/lighted/
+ * includeClosedRunways) then filter each surviving airport's runways.
+ *
+ * `minLengthFt`/`minWidthFt` are exclusion thresholds: a runway with an unknown
+ * value for the corresponding field is excluded, never treated as passing.
+ * `lighted` is tri-state — omitted means "either", not "unlighted".
+ */
+export interface RunwaySearchFilters {
+  country?: string;
+  includeClosedAirports: boolean;
+  includeClosedRunways: boolean;
+  lighted?: boolean;
+  limit: number;
+  minLengthFt?: number;
+  minWidthFt?: number;
+  region?: string;
+  surface?: string;
+  type?: string;
+}
+
+/** A matched runway paired with its airport — one flat join row per runway. */
+export interface RunwayMatch {
+  airport: Airport;
+  runway: Runway;
+}
+
+/** Result of a runway search — the flat rows (capped) plus the pre-limit total. */
+export interface RunwaySearchResult {
+  matches: RunwayMatch[];
+  totalMatched: number;
+}
+
 /** A country entry with its airport count, and optionally its regions. */
 export interface CountrySummary {
   airportCount: number;
