@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-07-18
+
+Streams the `setup()` CSV parse one row at a time into a reused cell buffer and loads the six source files one at a time — cutting the setup-time RSS peak ~40% (~871 → ~525 MiB) and lowering startup OOM risk on memory-constrained (sub-1 GiB) deployments, with steady-state footprint unchanged (#9).
+
 ## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-07-18
 
 Adds `ourairports_search_runways` — cross-airport runway-attribute search over the bundled corpus by airport facets (country/region/type) and runway facets (surface, min length/width, lighting), one flat airport-plus-runway row per match (#8).

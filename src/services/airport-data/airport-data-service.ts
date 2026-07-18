@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
-import { bool, compact, int, num, parseCsv, reqInt, reqStr, str } from './csv.js';
+import { bool, compact, forEachRow, int, num, reqInt, reqStr, str } from './csv.js';
 import { resolveBundledDataDir } from './data-dir.js';
 import { bearingDeg, nearest } from './geo.js';
 import type {
@@ -67,6 +67,16 @@ const CODE_PRIORITY: readonly { via: ResolvedVia; key: keyof Airport }[] = [
 ] as const;
 
 const STOPWORD = new Set(['the', 'of', 'and', 'a', 'an']);
+
+/**
+ * Force a full GC so the transient parse garbage (raw file strings, per-field
+ * slices) is returned to the OS at the end of `load()` rather than reclaimed
+ * lazily ~a minute later. Bun-only: `Bun.gc` is absent under Node and other
+ * runtimes, where this is a no-op — the streaming parser is the portable win.
+ */
+function releaseTransientParseMemory(): void {
+  (globalThis as { Bun?: { gc?: (force: boolean) => void } }).Bun?.gc?.(true);
+}
 
 /**
  * Tokenize a string for the text-search index: lowercase, strip diacritics,
@@ -119,23 +129,20 @@ export class AirportDataService {
     if (this.loaded) return;
     const started = performance.now();
 
+    // Read → parse → drop one file at a time: each raw string is a temporary
+    // that dies before the next read, and the awaits are GC yield points — so
+    // the resident high-water mark is one file's parse, not all six raw strings
+    // plus every file's transient parse garbage held live at once.
     const read = (file: string) => readFile(join(this.dataDir, file), 'utf-8');
-    const [airportsCsv, runwaysCsv, navaidsCsv, freqCsv, countriesCsv, regionsCsv] =
-      await Promise.all([
-        read(CSV_FILES.airports),
-        read(CSV_FILES.runways),
-        read(CSV_FILES.navaids),
-        read(CSV_FILES.frequencies),
-        read(CSV_FILES.countries),
-        read(CSV_FILES.regions),
-      ]);
+    this.loadCountries(await read(CSV_FILES.countries));
+    this.loadRegions(await read(CSV_FILES.regions));
+    this.loadAirports(await read(CSV_FILES.airports));
+    this.loadRunways(await read(CSV_FILES.runways));
+    this.loadFrequencies(await read(CSV_FILES.frequencies));
+    this.loadNavaids(await read(CSV_FILES.navaids));
 
-    this.loadCountries(countriesCsv);
-    this.loadRegions(regionsCsv);
-    this.loadAirports(airportsCsv);
-    this.loadRunways(runwaysCsv);
-    this.loadFrequencies(freqCsv);
-    this.loadNavaids(navaidsCsv);
+    // Return the transient parse pages to the OS now, not ~a minute later.
+    releaseTransientParseMemory();
 
     this.loaded = true;
     logger.info(
@@ -157,73 +164,72 @@ export class AirportDataService {
   // ---- CSV → index builders -------------------------------------------------
 
   private loadCountries(csv: string): void {
-    for (const r of parseCsv(csv)) {
-      const code = str(r.code);
-      if (!code) continue;
+    forEachRow(csv, (r) => {
+      const code = str(r.get('code'));
+      if (!code) return;
       const country: Country = {
         code,
-        name: reqStr(r.name, 'countries.name'),
+        name: reqStr(r.get('name'), 'countries.name'),
         ...compact({
-          continent: str(r.continent),
-          wikipediaLink: str(r.wikipedia_link),
-          keywords: str(r.keywords),
+          continent: str(r.get('continent')),
+          wikipediaLink: str(r.get('wikipedia_link')),
+          keywords: str(r.get('keywords')),
         }),
       };
       this.countriesByCode.set(code.toUpperCase(), country);
-    }
+    });
   }
 
   private loadRegions(csv: string): void {
-    for (const r of parseCsv(csv)) {
-      const code = str(r.code);
-      if (!code) continue;
+    forEachRow(csv, (r) => {
+      const code = str(r.get('code'));
+      if (!code) return;
       const region: Region = {
         code,
-        name: reqStr(r.name, 'regions.name'),
+        name: reqStr(r.get('name'), 'regions.name'),
         ...compact({
-          localCode: str(r.local_code),
-          continent: str(r.continent),
-          isoCountry: str(r.iso_country),
-          wikipediaLink: str(r.wikipedia_link),
+          localCode: str(r.get('local_code')),
+          continent: str(r.get('continent')),
+          isoCountry: str(r.get('iso_country')),
+          wikipediaLink: str(r.get('wikipedia_link')),
         }),
       };
       this.regionsByCode.set(code.toUpperCase(), region);
-    }
+    });
   }
 
   private loadAirports(csv: string): void {
-    const rows = parseCsv(csv);
     const lats: number[] = [];
     const lons: number[] = [];
 
-    for (const r of rows) {
-      const lat = num(r.latitude_deg);
-      const lon = num(r.longitude_deg);
+    forEachRow(csv, (r) => {
+      const lat = num(r.get('latitude_deg'));
+      const lon = num(r.get('longitude_deg'));
       // Coordinates are guaranteed in this dataset; skip the rare malformed row
       // rather than poison the coordinate array with NaN.
-      if (lat === undefined || lon === undefined) continue;
+      if (lat === undefined || lon === undefined) return;
 
       const airport: Airport = {
-        id: reqInt(r.id, 'airports.id'),
-        ident: reqStr(r.ident, 'airports.ident'),
-        type: reqStr(r.type, 'airports.type'),
-        name: reqStr(r.name, 'airports.name'),
+        id: reqInt(r.get('id'), 'airports.id'),
+        ident: reqStr(r.get('ident'), 'airports.ident'),
+        type: reqStr(r.get('type'), 'airports.type'),
+        name: reqStr(r.get('name'), 'airports.name'),
         latitudeDeg: lat,
         longitudeDeg: lon,
-        scheduledService: bool(r.scheduled_service),
+        scheduledService: bool(r.get('scheduled_service')),
         ...compact({
-          elevationFt: int(r.elevation_ft),
-          continent: str(r.continent),
-          isoCountry: str(r.iso_country),
-          isoRegion: str(r.iso_region),
-          municipality: str(r.municipality),
-          icaoCode: str(r.icao_code),
-          iataCode: str(r.iata_code),
-          gpsCode: str(r.gps_code),
-          localCode: str(r.local_code),
-          homeLink: str(r.home_link),
-          wikipediaLink: str(r.wikipedia_link),
-          keywords: str(r.keywords),
+          elevationFt: int(r.get('elevation_ft')),
+          continent: str(r.get('continent')),
+          isoCountry: str(r.get('iso_country')),
+          isoRegion: str(r.get('iso_region')),
+          municipality: str(r.get('municipality')),
+          icaoCode: str(r.get('icao_code')),
+          iataCode: str(r.get('iata_code')),
+          gpsCode: str(r.get('gps_code')),
+          localCode: str(r.get('local_code')),
+          homeLink: str(r.get('home_link')),
+          wikipediaLink: str(r.get('wikipedia_link')),
+          keywords: str(r.get('keywords')),
         }),
       };
 
@@ -248,7 +254,7 @@ export class AirportDataService {
           );
         }
       }
-    }
+    });
 
     // Code index is built AFTER all airports are loaded, in global priority
     // passes — so a unique ident is never shadowed by an earlier row's national
@@ -305,82 +311,81 @@ export class AirportDataService {
   }
 
   private loadRunways(csv: string): void {
-    for (const r of parseCsv(csv)) {
-      const airportRef = int(r.airport_ref);
-      if (airportRef === undefined) continue;
+    forEachRow(csv, (r) => {
+      const airportRef = int(r.get('airport_ref'));
+      if (airportRef === undefined) return;
       const runway: Runway = {
-        id: reqInt(r.id, 'runways.id'),
+        id: reqInt(r.get('id'), 'runways.id'),
         airportRef,
-        airportIdent: reqStr(r.airport_ident, 'runways.airport_ident'),
-        lighted: bool(r.lighted),
-        closed: bool(r.closed),
+        airportIdent: reqStr(r.get('airport_ident'), 'runways.airport_ident'),
+        lighted: bool(r.get('lighted')),
+        closed: bool(r.get('closed')),
         ...compact({
-          lengthFt: int(r.length_ft),
-          widthFt: int(r.width_ft),
-          surface: str(r.surface),
-          leIdent: str(r.le_ident),
-          leLatitudeDeg: num(r.le_latitude_deg),
-          leLongitudeDeg: num(r.le_longitude_deg),
-          leElevationFt: int(r.le_elevation_ft),
-          leHeadingDegT: num(r.le_heading_degT),
-          leDisplacedThresholdFt: int(r.le_displaced_threshold_ft),
-          heIdent: str(r.he_ident),
-          heLatitudeDeg: num(r.he_latitude_deg),
-          heLongitudeDeg: num(r.he_longitude_deg),
-          heElevationFt: int(r.he_elevation_ft),
-          heHeadingDegT: num(r.he_heading_degT),
-          heDisplacedThresholdFt: int(r.he_displaced_threshold_ft),
+          lengthFt: int(r.get('length_ft')),
+          widthFt: int(r.get('width_ft')),
+          surface: str(r.get('surface')),
+          leIdent: str(r.get('le_ident')),
+          leLatitudeDeg: num(r.get('le_latitude_deg')),
+          leLongitudeDeg: num(r.get('le_longitude_deg')),
+          leElevationFt: int(r.get('le_elevation_ft')),
+          leHeadingDegT: num(r.get('le_heading_degT')),
+          leDisplacedThresholdFt: int(r.get('le_displaced_threshold_ft')),
+          heIdent: str(r.get('he_ident')),
+          heLatitudeDeg: num(r.get('he_latitude_deg')),
+          heLongitudeDeg: num(r.get('he_longitude_deg')),
+          heElevationFt: int(r.get('he_elevation_ft')),
+          heHeadingDegT: num(r.get('he_heading_degT')),
+          heDisplacedThresholdFt: int(r.get('he_displaced_threshold_ft')),
         }),
       };
       pushToMap(this.runwaysByAirportRef, airportRef, runway);
-    }
+    });
   }
 
   private loadFrequencies(csv: string): void {
-    for (const r of parseCsv(csv)) {
-      const airportRef = int(r.airport_ref);
-      if (airportRef === undefined) continue;
+    forEachRow(csv, (r) => {
+      const airportRef = int(r.get('airport_ref'));
+      if (airportRef === undefined) return;
       const freq: Frequency = {
-        id: reqInt(r.id, 'airport-frequencies.id'),
+        id: reqInt(r.get('id'), 'airport-frequencies.id'),
         airportRef,
-        airportIdent: reqStr(r.airport_ident, 'airport-frequencies.airport_ident'),
-        type: reqStr(r.type, 'airport-frequencies.type'),
+        airportIdent: reqStr(r.get('airport_ident'), 'airport-frequencies.airport_ident'),
+        type: reqStr(r.get('type'), 'airport-frequencies.type'),
         ...compact({
-          description: str(r.description),
-          frequencyMhz: num(r.frequency_mhz),
+          description: str(r.get('description')),
+          frequencyMhz: num(r.get('frequency_mhz')),
         }),
       };
       pushToMap(this.frequenciesByAirportRef, airportRef, freq);
-    }
+    });
   }
 
   private loadNavaids(csv: string): void {
-    const rows = parseCsv(csv);
     const lats: number[] = [];
     const lons: number[] = [];
 
-    for (const r of rows) {
-      const lat = num(r.latitude_deg);
-      const lon = num(r.longitude_deg);
-      if (lat === undefined || lon === undefined) continue;
+    forEachRow(csv, (r) => {
+      const lat = num(r.get('latitude_deg'));
+      const lon = num(r.get('longitude_deg'));
+      if (lat === undefined || lon === undefined) return;
 
       const navaid: Navaid = {
-        id: reqInt(r.id, 'navaids.id'),
-        ident: reqStr(r.ident, 'navaids.ident'),
-        name: reqStr(r.name, 'navaids.name'),
-        type: reqStr(r.type, 'navaids.type'),
+        id: reqInt(r.get('id'), 'navaids.id'),
+        ident: reqStr(r.get('ident'), 'navaids.ident'),
+        name: reqStr(r.get('name'), 'navaids.name'),
+        type: reqStr(r.get('type'), 'navaids.type'),
         latitudeDeg: lat,
         longitudeDeg: lon,
         ...compact({
-          frequencyKhz: int(r.frequency_khz),
-          elevationFt: int(r.elevation_ft),
-          isoCountry: str(r.iso_country),
-          dmeFrequencyKhz: int(r.dme_frequency_khz),
-          dmeChannel: str(r.dme_channel),
-          magneticVariationDeg: num(r.magnetic_variation_deg),
-          usageType: str(r.usageType),
-          power: str(r.power),
-          associatedAirport: str(r.associated_airport),
+          frequencyKhz: int(r.get('frequency_khz')),
+          elevationFt: int(r.get('elevation_ft')),
+          isoCountry: str(r.get('iso_country')),
+          dmeFrequencyKhz: int(r.get('dme_frequency_khz')),
+          dmeChannel: str(r.get('dme_channel')),
+          magneticVariationDeg: num(r.get('magnetic_variation_deg')),
+          usageType: str(r.get('usageType')),
+          power: str(r.get('power')),
+          associatedAirport: str(r.get('associated_airport')),
         }),
       };
 
@@ -392,7 +397,7 @@ export class AirportDataService {
       if (navaid.associatedAirport) {
         pushToMap(this.navaidsByAirportIdent, navaid.associatedAirport.toUpperCase(), navaid);
       }
-    }
+    });
 
     const coords = new Float64Array(lats.length * 2);
     for (let i = 0; i < lats.length; i++) {

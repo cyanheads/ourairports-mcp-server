@@ -1,51 +1,82 @@
 /**
- * @fileoverview Minimal RFC-4180 CSV parser tuned for the OurAirports dumps.
+ * @fileoverview Minimal RFC-4180 CSV reader tuned for the OurAirports dumps.
  * Parses by HEADER NAME (not column position) because the live CSV column order
  * differs from the published data dictionary (e.g. icao_code precedes gps_code
  * in the real file). Handles quoted fields, embedded commas, embedded newlines,
  * and doubled `""` escapes — all of which appear in OurAirports name/keyword
  * columns.
+ *
+ * Streaming, not array-materializing: `forEachRow` hands each row to a visitor
+ * as soon as it is parsed, reusing a single cell buffer and a single row view.
+ * It never builds the whole `string[][]` or a `Record<string,string>` per row,
+ * so parsing the 12.6 MB airports.csv holds one row's cells live — not 85k row
+ * objects and their strings stacked on top of the raw file. Cells are built by
+ * character accumulation (flat, self-owned strings) rather than by slicing the
+ * raw buffer — a slice-view would pin the whole multi-MB file string alive for
+ * as long as any parsed field is retained, re-inflating the steady-state heap.
  * @module src/services/airport-data/csv
  */
 
 /**
- * Parse CSV text into an array of row objects keyed by the header row.
- *
- * Each row maps every header column to its raw string cell value. Empty cells
- * become `''`; callers decide what "absent" means per field (see the field
- * coercion helpers below). Trailing empty lines are ignored.
+ * One parsed CSV row. `get(column)` returns the raw cell for a header column, or
+ * `''` when the column is absent from the header or the row is short. The
+ * instance is reused across rows — read what you need during the visit; do not
+ * retain the row or its values beyond the callback.
  */
-export function parseCsv(text: string): Record<string, string>[] {
-  const rows = parseRows(text);
-  if (rows.length === 0) return [];
-  const header = rows[0] ?? [];
-  const out: Record<string, string>[] = [];
-  for (let i = 1; i < rows.length; i++) {
-    const cells = rows[i];
-    if (!cells) continue;
-    // Skip a stray fully-empty trailing line (one empty cell, no real data).
-    if (cells.length === 1 && cells[0] === '') continue;
-    const record: Record<string, string> = {};
-    for (let c = 0; c < header.length; c++) {
-      record[header[c] ?? `col${c}`] = cells[c] ?? '';
-    }
-    out.push(record);
-  }
-  return out;
+export interface CsvRow {
+  get(column: string): string;
 }
 
 /**
- * Tokenize CSV text into rows of raw cells. State machine over the full string;
- * quotes toggle "in field" mode where commas/newlines are literal and `""` is a
- * single quote.
+ * Stream CSV rows to `visit`, keyed by the header row. Consumes the header row
+ * (never visited), skips a stray fully-empty trailing line, and reads absent
+ * trailing cells as `''` — matching the previous parseRows+parseCsv semantics
+ * byte-for-byte (verified against the six bundled CSVs and a battery of quoting
+ * / line-ending edge cases).
+ *
+ * State machine over the full string: a `"` toggles quoted mode where commas and
+ * newlines are literal and `""` is a single quote; a top-level comma closes a
+ * field; LF, bare CR, or CRLF closes the row; a trailing field/row with no
+ * terminator is flushed at end-of-input.
  */
-function parseRows(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
+export function forEachRow(text: string, visit: (row: CsvRow) => void): void {
+  const len = text.length;
+
+  /** header column name → column index; built from the first row. */
+  let headerIndex: Map<string, number> | undefined;
+  /** Reused cell buffer for the current row; only [0, cellCount) is live. */
+  const cells: string[] = [];
+  let cellCount = 0;
+
+  const view: CsvRow = {
+    get(column) {
+      const idx = headerIndex?.get(column);
+      if (idx === undefined || idx >= cellCount) return '';
+      return cells[idx] as string;
+    },
+  };
+
   let field = '';
   let inQuotes = false;
 
-  for (let i = 0; i < text.length; i++) {
+  const pushField = (): void => {
+    cells[cellCount++] = field;
+    field = '';
+  };
+
+  const finishRow = (): void => {
+    if (headerIndex === undefined) {
+      const map = new Map<string, number>();
+      for (let c = 0; c < cellCount; c++) map.set(cells[c] as string, c); // later dup column wins
+      headerIndex = map;
+    } else if (!(cellCount === 1 && cells[0] === '')) {
+      // Skip a stray fully-empty trailing line (one empty cell, no real data).
+      visit(view);
+    }
+    cellCount = 0;
+  };
+
+  for (let i = 0; i < len; i++) {
     const ch = text[i];
 
     if (inQuotes) {
@@ -65,33 +96,26 @@ function parseRows(text: string): string[][] {
     if (ch === '"') {
       inQuotes = true;
     } else if (ch === ',') {
-      row.push(field);
-      field = '';
+      pushField();
     } else if (ch === '\n') {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
+      pushField();
+      finishRow();
     } else if (ch === '\r') {
-      // swallow — handled by the following \n (CRLF) or treated as line end (bare CR)
+      // Bare CR ends the row; a CRLF's CR is swallowed (the following LF ends it).
       if (text[i + 1] !== '\n') {
-        row.push(field);
-        rows.push(row);
-        row = [];
-        field = '';
+        pushField();
+        finishRow();
       }
     } else {
       field += ch;
     }
   }
 
-  // Flush the final field/row if the file didn't end with a newline.
-  if (field !== '' || row.length > 0) {
-    row.push(field);
-    rows.push(row);
+  // Flush a final field/row when the input did not end with a newline.
+  if (field !== '' || cellCount > 0) {
+    pushField();
+    finishRow();
   }
-
-  return rows;
 }
 
 /** Trimmed string, or `undefined` when the cell is empty. */
