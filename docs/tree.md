@@ -1,6 +1,6 @@
 # ourairports-mcp-server - Directory Structure
 
-Generated on: 2026-06-20 17:53:59
+Generated on: 2026-07-18 21:07:39
 
 ```text
 ourairports-mcp-server/
@@ -11,10 +11,12 @@ ourairports-mcp-server/
 │   ├── mcp.json
 │   └── plugin.json
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
@@ -168,6 +170,7 @@ ourairports-mcp-server/
 │       └── search-airports.tool.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md

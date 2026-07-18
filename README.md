@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -62,7 +62,7 @@ Five read-only tools, all local queries against the bundled index — code resol
 The common entry point — search by free text, facets, or both.
 
 - Free-text search over name, municipality, and keywords; tokens are AND-matched (word order and partial words handled)
-- Faceted filters: `country` (ISO 3166-1 alpha-2), `region` (ISO 3166-2), and `type`
+- Faceted filters: `country` (ISO 3166-1 alpha-2), `region` (ISO 3166-2), and `type` — `country`/`region` are exact match, case-insensitive, with surrounding whitespace ignored
 - Closed airports excluded by default; opt in with `include_closed`
 - Results ranked operational/larger-airports-first, each with its full code set and coordinates for chaining into `ourairports_get_airport`
 - Truncation disclosure — total matched count, applied cap, and guidance to broaden or narrow
@@ -73,8 +73,8 @@ The common entry point — search by free text, facets, or both.
 
 The detail tool — one call returns everything the common case needs.
 
-- Resolves a single `code` case-insensitively across all five identifier spaces (priority: ident → ICAO → IATA → GPS → local)
-- Runways and radio frequencies inline; `include` trims the response to a subset
+- Resolves a single `code` case-insensitively across all five identifier spaces (priority: ident → ICAO → IATA → GPS → local); surrounding whitespace is ignored
+- Runways and radio frequencies inline; `include` trims the response to a subset, and the output's `included` field distinguishes a relation omitted by `include` from one that genuinely has no records
 - Echoes the airport's complete code set plus a `resolvedVia` / `resolutionNote`, with an ambiguity warning for shared national codes so a wrong resolution is self-correcting
 - Absent codes reported as `null`; closed airports always resolve
 - `unknown_code` error with a recovery hint when no identifier space matches
@@ -220,7 +220,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.3.2](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
 - No API key, account, or external service — all data is bundled.
 
 ### Installation

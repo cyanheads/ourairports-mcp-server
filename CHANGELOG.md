@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-07-18
+
+Definition fixes: get_airport gains an `included` field to disambiguate omitted vs empty relations (#5), find_navaids resolves unknown_code at the tool boundary with its recovery hint (#6), and code/facet inputs trim whitespace at the schema boundary (#7). Adopts mcp-ts-core ^0.10.14 with supply-chain install guards.
+
 ## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-30 · 🛡️ Security
 
 Search and lookup fixes: forward-only token-prefix matching, an ident-priority code index, and a distinct no-searchable-terms notice; find_airports and find_navaids now honor OURAIRPORTS_DEFAULT_SEARCH_LIMIT clamped to 50. Clears a medium-severity transitive js-yaml DoS advisory and refreshes framework + dev-deps.
