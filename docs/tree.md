@@ -1,10 +1,9 @@
 # ourairports-mcp-server - Directory Structure
 
-Generated on: 2026-07-18 22:13:05
+Generated on: 2026-08-25 02:13:18
 
 ```text
 ourairports-mcp-server/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
@@ -15,6 +14,8 @@ ourairports-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
 │   └── SECURITY.md
 ├── .vscode/
@@ -24,7 +25,6 @@ ourairports-mcp-server/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
 │   └── template.md
-├── data/
 ├── docs/
 │   └── design.md
 ├── scripts/
@@ -165,11 +165,17 @@ ourairports-mcp-server/
 │   │   │   ├── regions.csv
 │   │   │   └── runways.csv
 │   │   └── load.ts
+│   ├── fuzz/
+│   │   └── find-navaids-tool.fuzz.test.ts
+│   ├── integration/
+│   │   └── find-navaids-contract.int.test.ts
 │   ├── prompts/
 │   ├── resources/
 │   │   └── airport.resource.test.ts
 │   ├── services/
 │   │   └── airport-data-service.test.ts
+│   ├── smoke/
+│   │   └── definitions.smoke.test.ts
 │   └── tools/
 │       ├── find-airports.tool.test.ts
 │       ├── find-navaids.tool.test.ts
