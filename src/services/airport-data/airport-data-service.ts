@@ -149,14 +149,16 @@ export class AirportDataService {
       'airport-data indices built',
       requestContextService.createRequestContext({
         operation: 'AirportDataLoad',
-        dataDir: this.dataDir,
-        airports: this.airportsById.size,
-        runways: this.runwaysByAirportRef.size,
-        navaids: this.navaidList.length,
-        countries: this.countriesByCode.size,
-        regions: this.regionsByCode.size,
-        codeKeys: this.codeIndex.size,
-        durationMs: Math.round(performance.now() - started),
+        additionalContext: {
+          dataDir: this.dataDir,
+          airports: this.airportsById.size,
+          runways: this.runwaysByAirportRef.size,
+          navaids: this.navaidList.length,
+          countries: this.countriesByCode.size,
+          regions: this.regionsByCode.size,
+          codeKeys: this.codeIndex.size,
+          durationMs: Math.round(performance.now() - started),
+        },
       }),
     );
   }

@@ -5,7 +5,7 @@
  * @module tests/tools/get-airport.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext as createBaseMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
 
@@ -16,6 +16,7 @@ vi.mock('@/services/airport-data/airport-data-service.js', async (orig) => {
 });
 
 const { getAirportTool } = await import('@/mcp-server/tools/definitions/get-airport.tool.js');
+const createMockContext = () => createBaseMockContext({ errors: getAirportTool.errors });
 
 describe('getAirportTool', () => {
   it('resolves by IATA with inline runways and frequencies', async () => {
@@ -65,7 +66,9 @@ describe('getAirportTool', () => {
     expect(result.included).toEqual(['runways', 'frequencies']);
     expect(result.runways.length).toBe(2);
     expect(result.frequencies.length).toBeGreaterThanOrEqual(3);
-    const text = (getAirportTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    const text = (getAirportTool.format?.(result) ?? [])
+      .flatMap((content) => (content.type === 'text' ? [content.text] : []))
+      .join('\n');
     expect(text).toContain('**Included:** runways, frequencies');
     expect(text).not.toContain('Not requested');
     expect(text).not.toContain('None recorded');
@@ -80,7 +83,9 @@ describe('getAirportTool', () => {
     expect(result.included).toEqual(['runways']);
     expect(result.runways.length).toBe(2);
     expect(result.frequencies).toEqual([]);
-    const text = (getAirportTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    const text = (getAirportTool.format?.(result) ?? [])
+      .flatMap((content) => (content.type === 'text' ? [content.text] : []))
+      .join('\n');
     // KSEA HAS frequencies — omitting them must not read as "None recorded".
     expect(text).toMatch(/### Frequencies\n_Not requested/);
     expect(text).not.toContain('### Frequencies (0)');
@@ -96,7 +101,9 @@ describe('getAirportTool', () => {
     expect(result.included).toEqual([]);
     expect(result.runways).toEqual([]);
     expect(result.frequencies).toEqual([]);
-    const text = (getAirportTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    const text = (getAirportTool.format?.(result) ?? [])
+      .flatMap((content) => (content.type === 'text' ? [content.text] : []))
+      .join('\n');
     expect(text).toContain('**Included:** none');
     expect(text).not.toContain('None recorded');
     expect(text.match(/_Not requested/g)?.length).toBe(2);
@@ -110,13 +117,15 @@ describe('getAirportTool', () => {
     );
     expect(result.included).toEqual(['frequencies']);
     expect(result.frequencies).toEqual([]);
-    const text = (getAirportTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    const text = (getAirportTool.format?.(result) ?? [])
+      .flatMap((content) => (content.type === 'text' ? [content.text] : []))
+      .join('\n');
     expect(text).toMatch(/### Frequencies \(0\)\n_None recorded\._/);
     expect(text).toMatch(/### Runways\n_Not requested/); // runways not requested here
   });
 
   it('throws unknown_code for an unknown code', () => {
-    const ctx = createMockContext({ errors: getAirportTool.errors });
+    const ctx = createMockContext();
     expect(() => getAirportTool.handler(getAirportTool.input.parse({ code: 'ZZZZ' }), ctx)).toThrow(
       /No airport found/,
     );
@@ -125,7 +134,9 @@ describe('getAirportTool', () => {
   it('format() renders runways and frequencies', async () => {
     const ctx = createMockContext();
     const result = await getAirportTool.handler(getAirportTool.input.parse({ code: 'KSEA' }), ctx);
-    const text = (getAirportTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    const text = (getAirportTool.format?.(result) ?? [])
+      .flatMap((content) => (content.type === 'text' ? [content.text] : []))
+      .join('\n');
     expect(text).toContain('Seattle Tacoma International Airport');
     expect(text).toContain('16L');
     expect(text).toContain('119.9 MHz');

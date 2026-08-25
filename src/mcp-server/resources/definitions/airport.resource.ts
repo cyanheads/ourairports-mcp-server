@@ -27,6 +27,7 @@ export const airportResource = resource('airport://{code}', {
   description:
     'A single airport record by any code (IATA / ICAO / GPS / local / OurAirports ident), with runways and radio frequencies inline. Stable-URI twin of ourairports_get_airport.',
   mimeType: 'application/json',
+  cacheHint: { ttlMs: 86_400_000, cacheScope: 'public' },
 
   errors: [
     {

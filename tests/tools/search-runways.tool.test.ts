@@ -196,7 +196,7 @@ describe('searchRunwaysTool', () => {
       searchRunwaysTool.input.parse({ region: 'US-NY' }),
       ctx,
     );
-    const effective = searchRunwaysTool.output.extend(searchRunwaysTool.enrichment);
+    const effective = searchRunwaysTool.output.extend(searchRunwaysTool.enrichment!);
     expect(effective.safeParse({ ...result, ...getEnrichment(ctx) }).success).toBe(true);
     expect(getEnrichment(ctx)?.truncated).toBeUndefined();
   });
@@ -207,7 +207,7 @@ describe('searchRunwaysTool', () => {
       searchRunwaysTool.input.parse({ limit: 1 }),
       ctx,
     );
-    const effective = searchRunwaysTool.output.extend(searchRunwaysTool.enrichment);
+    const effective = searchRunwaysTool.output.extend(searchRunwaysTool.enrichment!);
     expect(effective.safeParse({ ...result, ...getEnrichment(ctx) }).success).toBe(true);
   });
 
@@ -219,7 +219,7 @@ describe('searchRunwaysTool', () => {
     );
     expect(result.runways).toHaveLength(0);
     expect(getEnrichment(ctx)?.notice).toMatch(/No runways matched/);
-    const effective = searchRunwaysTool.output.extend(searchRunwaysTool.enrichment);
+    const effective = searchRunwaysTool.output.extend(searchRunwaysTool.enrichment!);
     expect(effective.safeParse({ ...result, ...getEnrichment(ctx) }).success).toBe(true);
   });
 
@@ -240,7 +240,9 @@ describe('searchRunwaysTool', () => {
       searchRunwaysTool.input.parse({ region: 'US-WA', limit: 50 }),
       ctx,
     );
-    const text = (searchRunwaysTool.format?.(result) ?? []).map((c) => c.text).join('\n');
+    const text = (searchRunwaysTool.format?.(result) ?? [])
+      .flatMap((content) => (content.type === 'text' ? [content.text] : []))
+      .join('\n');
     expect(text).toContain('Seattle Tacoma International Airport');
     expect(text).toContain('16L'); // runway end designator
     expect(text).toContain('surface:'); // runway surface line

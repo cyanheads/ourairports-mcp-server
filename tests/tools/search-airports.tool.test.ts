@@ -55,7 +55,7 @@ describe('searchAirportsTool', () => {
       searchAirportsTool.input.parse({ query: 'seattle' }),
       ctx,
     );
-    const effective = searchAirportsTool.output.extend(searchAirportsTool.enrichment);
+    const effective = searchAirportsTool.output.extend(searchAirportsTool.enrichment!);
     const parsed = effective.safeParse({ ...result, ...getEnrichment(ctx) });
     expect(parsed.success).toBe(true);
     expect(getEnrichment(ctx)?.truncated).toBeUndefined();
@@ -67,7 +67,7 @@ describe('searchAirportsTool', () => {
       searchAirportsTool.input.parse({ query: 'zzznotaplace' }),
       ctx,
     );
-    const effective = searchAirportsTool.output.extend(searchAirportsTool.enrichment);
+    const effective = searchAirportsTool.output.extend(searchAirportsTool.enrichment!);
     expect(effective.safeParse({ ...result, ...getEnrichment(ctx) }).success).toBe(true);
   });
 
@@ -102,7 +102,7 @@ describe('searchAirportsTool', () => {
     );
     expect(result.airports).toHaveLength(0);
     expect(getEnrichment(ctx)?.notice).toMatch(/no searchable terms/i);
-    const effective = searchAirportsTool.output.extend(searchAirportsTool.enrichment);
+    const effective = searchAirportsTool.output.extend(searchAirportsTool.enrichment!);
     expect(effective.safeParse({ ...result, ...getEnrichment(ctx) }).success).toBe(true);
   });
 

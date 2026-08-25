@@ -14,6 +14,13 @@ import { initAirportDataService } from './services/airport-data/airport-data-ser
 await createApp({
   name: 'ourairports-mcp-server',
   title: 'ourairports-mcp-server',
+  cacheHints: {
+    'tools/list': { ttlMs: 86_400_000, cacheScope: 'public' },
+    'prompts/list': { ttlMs: 86_400_000, cacheScope: 'public' },
+    'resources/list': { ttlMs: 86_400_000, cacheScope: 'public' },
+    'resources/templates/list': { ttlMs: 86_400_000, cacheScope: 'public' },
+    'server/discover': { ttlMs: 86_400_000, cacheScope: 'public' },
+  },
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
   prompts: [],

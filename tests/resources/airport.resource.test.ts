@@ -4,7 +4,7 @@
  * @module tests/resources/airport.resource.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext as createBaseMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
 
@@ -15,11 +15,12 @@ vi.mock('@/services/airport-data/airport-data-service.js', async (orig) => {
 });
 
 const { airportResource } = await import('@/mcp-server/resources/definitions/airport.resource.js');
+const createMockContext = () => createBaseMockContext({ errors: airportResource.errors });
 
 describe('airportResource', () => {
   it('resolves by ICAO with runways and frequencies inline', async () => {
     const ctx = createMockContext();
-    const params = airportResource.params.parse({ code: 'KSEA' });
+    const params = airportResource.params!.parse({ code: 'KSEA' });
     const result = await airportResource.handler(params, ctx);
     expect(result.airport.ident).toBe('KSEA');
     expect(result.runways.length).toBe(2);
@@ -28,8 +29,8 @@ describe('airportResource', () => {
   });
 
   it('throws unknown_code for an unknown code', () => {
-    const ctx = createMockContext({ errors: airportResource.errors });
-    const params = airportResource.params.parse({ code: 'ZZZZ' });
+    const ctx = createMockContext();
+    const params = airportResource.params!.parse({ code: 'ZZZZ' });
     expect(() => airportResource.handler(params, ctx)).toThrow(/No airport found/);
   });
 
@@ -37,12 +38,12 @@ describe('airportResource', () => {
   // whitespace-only code fails schema validation.
   it('resolves a padded code by trimming ("  ksea  ")', async () => {
     const ctx = createMockContext();
-    const params = airportResource.params.parse({ code: '  ksea  ' });
+    const params = airportResource.params!.parse({ code: '  ksea  ' });
     const result = await airportResource.handler(params, ctx);
     expect(result.airport.ident).toBe('KSEA');
   });
 
   it('rejects a whitespace-only code at schema validation', () => {
-    expect(() => airportResource.params.parse({ code: '   ' })).toThrow();
+    expect(() => airportResource.params!.parse({ code: '   ' })).toThrow();
   });
 });

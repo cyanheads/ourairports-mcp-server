@@ -35,7 +35,11 @@ describe('findNavaidsTool', () => {
   it('coordinate mode: nearest-first with distance', async () => {
     const ctx = ctxWithContract();
     const result = await findNavaidsTool.handler(
-      findNavaidsTool.input.parse({ latitude: 47.45, longitude: -122.31, radius_km: 200 }),
+      findNavaidsTool.input.parse({
+        latitude: 47.45,
+        longitude: -122.31,
+        radius_km: 200,
+      }),
       ctx,
     );
     expect(result.mode).toBe('coordinate');
@@ -147,7 +151,11 @@ describe('findNavaidsTool', () => {
     cfg.defaultSearchLimit = 80;
     const spy = vi.spyOn(svc, 'nearbyNavaids');
     await findNavaidsTool.handler(
-      findNavaidsTool.input.parse({ latitude: 47.45, longitude: -122.31, radius_km: 200 }),
+      findNavaidsTool.input.parse({
+        latitude: 47.45,
+        longitude: -122.31,
+        radius_km: 200,
+      }),
       ctxWithContract(),
     );
     expect(spy.mock.calls[0]?.[3]).toBe(50); // 4th positional arg is limit
