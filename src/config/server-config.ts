@@ -11,22 +11,10 @@
 import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
-/**
- * Treats an unset env var (`undefined`), a set-but-empty env var (`""`), and an
- * unsubstituted MCPB placeholder (`${user_config.X}`) identically as "not set",
- * so an optional override left blank in a host UI falls back to the default
- * instead of becoming a literal empty / placeholder string on the data path.
- */
-const PLACEHOLDER_PATTERN = /^\$\{[^}]+\}$/;
-const emptyAsUndefined = (v: unknown) => {
-  if (v === '') return;
-  if (typeof v === 'string' && PLACEHOLDER_PATTERN.test(v)) return;
-  return v;
-};
-
 const ServerConfigSchema = z.object({
   dataDir: z
-    .preprocess(emptyAsUndefined, z.string().optional())
+    .string()
+    .optional()
     .describe(
       'Directory holding the six OurAirports CSV files. Defaults to the bundled `data/` directory inside the package. Overridable to point at a fresher local data drop.',
     ),
