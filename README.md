@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -33,21 +33,9 @@
 
 ## Overview
 
-`ourairports-mcp-server` is the static aviation reference layer for resolving airport identifiers and grounding coordinates. It answers *what exists* — the catalog of airports, their codes, runways, navaids, and radio frequencies — to complement live aviation services that answer *what is happening* (weather, positions).
+Offline aviation reference data from the public-domain [OurAirports](https://ourairports.com/) dataset — airports, runways, navaids, and radio frequencies, bundled with the package rather than fetched at runtime. Resolve an airport by any code, search by name or facets, ground a coordinate in the nearest airports or navaids, and look up the countries and regions in the dataset. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
 
-The entire [OurAirports](https://ourairports.com/) dataset is dedicated to the public domain and published as flat CSVs. Those six CSV files — airports, runways, navaids, airport frequencies, countries, and regions (~178k rows, ~20 MB) — are **bundled into the package** and baked into the Docker image at build time. At startup the server parses them into in-memory indices; every tool is then a local query. The result has no API key, no rate limit, and no upstream dependency to inherit an outage from.
-
-How the working model fits together:
-
-- **Code resolution across five identifier spaces.** Airports carry IATA, ICAO, GPS, local, and the OurAirports `ident`. A single `code` parameter resolves against a unified index (priority: ident → ICAO → IATA → GPS → local), and the response echoes the full code set so an ambiguous national code is self-correcting. A missing code (no IATA for a small field) is reported as `null`, never a 404.
-- **Nearest-neighbour by great-circle distance.** Coordinate lookups run a haversine scan over a flat `Float64Array` of every airport (or navaid) position and return the nearest results ranked by distance, each with its bearing — sub-millisecond at this scale, no spatial index needed.
-- **Honest sparsity.** Absent upstream fields (no elevation, null runway dimensions) surface as unknown. Capped result lists disclose truncation.
-
-OurAirports is community-edited. The data is surfaced as-is and is **not authoritative for real flight operations** — treat it the way you would any crowd-sourced reference.
-
-## Tools
-
-Six read-only tools, all local queries against the bundled index — code resolution and detail, airport and runway search, coordinate grounding, navaids, and the country/region lookup table:
+### Tools
 
 | Tool | Description |
 |:---|:---|
@@ -58,34 +46,38 @@ Six read-only tools, all local queries against the bundled index — code resolu
 | `ourairports_find_navaids` | Navigation aids (VOR, VOR-DME, DME, NDB, NDB-DME, TACAN, VORTAC) near a coordinate or serving a specific airport. |
 | `ourairports_list_countries` | Countries present in the dataset with ISO codes and airport counts; optional continent filter and nested regions. The lookup table for valid `country`/`region` filter values. |
 
-### `ourairports_search_airports`
+### Resources
 
-The common entry point — search by free text, facets, or both.
+| Resource | Description |
+|:---|:---|
+| `airport://{code}` | Single airport record by any code (IATA/ICAO/GPS/local/ident), with runways and frequencies inline. |
+
+All data is also reachable via `ourairports_get_airport` — tool-only clients lose nothing. Not exposed as a resource list (enumerating 85k airports is a dump, not a discovery aid); discovery is `ourairports_search_airports`.
+
+## Capability reference
+
+### `ourairports_search_airports` <sub>tool</sub>
 
 - Free-text search over name, municipality, and keywords; tokens are AND-matched (word order and partial words handled)
 - Faceted filters: `country` (ISO 3166-1 alpha-2), `region` (ISO 3166-2), and `type` — `country`/`region` are exact match, case-insensitive, with surrounding whitespace ignored
 - Closed airports excluded by default; opt in with `include_closed`
 - Results ranked operational/larger-airports-first, each with its full code set and coordinates for chaining into `ourairports_get_airport`
-- Truncation disclosure — total matched count, applied cap, and guidance to broaden or narrow
+- `limit` accepts 1–100 rows and defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT` (20); truncation reports the total matched count, cap, and recovery guidance
 
 ---
 
-### `ourairports_search_runways`
-
-Cross-airport runway search — the counterpart to `ourairports_get_airport`, which lists runways for one already-known airport.
+### `ourairports_search_runways` <sub>tool</sub>
 
 - Airport facets (`country`, `region`, `type`) narrow the airports first; runway facets (`surface`, `min_length_ft`, `min_width_ft`, `lighted`) then filter their runways
 - `surface` is a case-insensitive substring match against the raw upstream surface string (no controlled vocabulary — a shorter fragment like `asp` matches ASP, ASPH, and Asphalt), not an exact code
 - Returns one flat `{ airport, runway }` row per matching runway — an airport with three matching runways contributes three rows
 - A runway whose length or width is unknown is excluded when the matching `min_*_ft` filter is set — never assumed to meet a threshold the data can't confirm
 - Closed airports and closed runways are both excluded unless `include_closed_airports` / `include_closed_runways` is set
-- Truncation disclosure — total matched count, applied cap, and guidance to broaden or narrow
+- `limit` accepts 1–100 rows and defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT` (20); truncation reports the total matched count, cap, and recovery guidance
 
 ---
 
-### `ourairports_get_airport`
-
-The detail tool — one call returns everything the common case needs.
+### `ourairports_get_airport` <sub>tool</sub>
 
 - Resolves a single `code` case-insensitively across all five identifier spaces (priority: ident → ICAO → IATA → GPS → local); surrounding whitespace is ignored
 - Runways and radio frequencies inline; `include` trims the response to a subset, and the output's `included` field distinguishes a relation omitted by `include` from one that genuinely has no records
@@ -95,47 +87,43 @@ The detail tool — one call returns everything the common case needs.
 
 ---
 
-### `ourairports_find_airports`
-
-The grounding tool — turn a latitude/longitude into the nearest airport(s).
+### `ourairports_find_airports` <sub>tool</sub>
 
 - Great-circle (haversine) ranking, nearest-first, each result with `distanceKm` and `bearingDeg` (degrees true) from the query point
-- `radius_km` (1–500, default 100), optional `type` filter, `include_closed` opt-in
+- `radius_km` (1–500, default 100); `limit` (1–50) defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT`, clamped to this tool's 50-row max; optional `type` filter; `include_closed` opt-in
 - Coordinate in, ranked airports out — no geocoding; resolve place names to lat/lon upstream first
 - Empty-radius guidance suggesting a wider `radius_km`
 
 ---
 
-### `ourairports_find_navaids`
+### `ourairports_find_navaids` <sub>tool</sub>
 
-Navigation aids two ways — spatially or by airport.
-
-- **Coordinate mode:** `latitude` + `longitude` (+ optional `radius_km`) ranks navaids nearest-first with distance and bearing
+- **Coordinate mode:** `latitude` + `longitude` (+ optional `radius_km`, 1–500, default 100) ranks navaids nearest-first with distance and bearing; `limit` (1–50) defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT`, clamped to 50
 - **Airport mode:** `airport_code` returns the navaids serving that airport
-- Exactly one mode required — supplying both or neither is a validation error
+- Exactly one mode required — supplying both or neither is a `mode_conflict` validation error
 - Frequencies surfaced in both kHz (the stored value — a VOR on 114.5 MHz reads `frequencyKhz` 114500) and MHz
 - Airport mode distinguishes "airport not found" (`unknown_code` error) from "airport found but has no associated navaids" (empty list with a note)
 
 ---
 
-## Resource and prompt
+### `ourairports_list_countries` <sub>tool</sub>
 
-| Type | Name | Description |
-|:---|:---|:---|
-| Resource | `airport://{code}` | Single airport record by any code (IATA/ICAO/GPS/local/ident), with runways and frequencies inline. |
+- Optional `continent` filter (AF, AN, AS, EU, NA, OC, SA); optional `include_regions` nests each country's ISO 3166-2 regions with their airport counts
+- Airport counts exclude closed airports
+- Countries sorted by name; the lookup table for valid `country` / `region` filter values used by `ourairports_search_airports`
+- Empty continent match returns a notice suggesting a call without the filter
 
-The `airport://{code}` resource is a stable-URI twin of `ourairports_get_airport` for clients that inject resource context. All data is reachable from the tools alone — tool-only clients lose nothing. The corpus is not exposed as a resource list (enumerating 85k airports is a dump, not a discovery aid); discovery is `ourairports_search_airports`.
+---
+
+### `airport://{code}` <sub>resource</sub>
+
+- Same output shape as `ourairports_get_airport` — full record with runways and radio frequencies inline
+- `code` resolves case-insensitively across all five identifier spaces (priority: ident → ICAO → IATA → GPS → local)
+- `unknown_code` error with a recovery hint when no identifier space matches
 
 ## Features
 
-Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp-ts-core):
-
-- Declarative tool and resource definitions — single file per primitive, framework handles registration and validation
-- Unified error handling — handlers throw, framework catches, classifies, and formats
-- Pluggable auth: `none`, `jwt`, `oauth`
-- Swappable storage backends: `in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`
-- Structured logging with optional OpenTelemetry tracing
-- Runs locally (stdio/HTTP) or on Cloudflare Workers from the same codebase
+Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
 
 OurAirports-specific:
 
@@ -167,7 +155,7 @@ A public instance is available at `https://ourairports.caseyjhand.com/mcp` — n
 }
 ```
 
-### Local / self-hosted
+### Self-Hosted / Local
 
 Add the following to your MCP client configuration file.
 
@@ -234,7 +222,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
 - No API key, account, or external service — all data is bundled.
 
 ### Installation
@@ -314,7 +302,7 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ```sh
 docker build -t ourairports-mcp-server .
-docker run --rm -e MCP_TRANSPORT_TYPE=stdio ourairports-mcp-server
+docker run --rm -i -e MCP_TRANSPORT_TYPE=stdio ourairports-mcp-server
 ```
 
 The build stage runs `bun run build:data` so the dataset is fetched and baked into the image — the resulting container is fully self-contained and makes no network calls at runtime. The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/ourairports-mcp-server`. OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
@@ -329,6 +317,7 @@ The build stage runs `bun run build:data` so the dataset is fetched and baked in
 | `src/mcp-server/resources` | Resource definitions. The `airport://{code}` record. |
 | `src/services/airport-data` | The bundled-data service — CSV parsing, in-memory indices, code resolution, search, and the haversine geo scan. |
 | `scripts/build-data.ts` | Build-time fetcher that bundles the six OurAirports CSVs into `data/`. |
+| `framework-skills/` | Project development skills synced from `@cyanheads/mcp-ts-core`. |
 | `tests/` | Unit and integration tests mirroring `src/`. |
 
 ## Development guide
@@ -344,9 +333,11 @@ See [`CLAUDE.md`/`AGENTS.md`](./CLAUDE.md) for development guidelines and archit
 
 Airport, runway, navaid, and frequency data from [OurAirports](https://ourairports.com/), dedicated to the public domain. Attribution is a courtesy, not a requirement. Source CSVs are published daily at [davidmegginson.github.io/ourairports-data](https://davidmegginson.github.io/ourairports-data/).
 
+OurAirports is community-edited; the data is surfaced as-is and is not authoritative for real flight operations — treat it the way you would any crowd-sourced reference.
+
 ## Contributing
 
-Issues and pull requests are welcome. Run checks and tests before submitting:
+Issues are welcome. Run checks and tests before submitting:
 
 ```sh
 bun run devcheck
