@@ -1,13 +1,28 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "ourairports-mcp-server",
   "version": "0.2.2",
   "description": "Resolve airport codes (IATA/ICAO/GPS/local), search airports, find the nearest by coordinate, and look up runways, navaids, and radio frequencies from the bundled public-domain OurAirports dataset via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": "Casey Hand"
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
   },
   "homepage": "https://github.com/cyanheads/ourairports-mcp-server#readme",
   "repository": "https://github.com/cyanheads/ourairports-mcp-server",
   "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "ourairports",
+    "aviation",
+    "airport",
+    "iata",
+    "icao",
+    "navaid",
+    "runway"
+  ],
   "mcpServers": {
     "ourairports-mcp-server": {
       "command": "npx",
