@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.3](changelog/0.2.x/0.2.3.md) — 2026-09-19 · ⚠️ Breaking
+
+HTTP starts stateless by default, core improves tool input and error guidance, and development skills move to framework-skills/.
+
 ## [0.2.2](changelog/0.2.x/0.2.2.md) — 2026-08-24
 
 Adopts mcp-ts-core ^0.12.3 and SDK v2 with current and legacy client compatibility, strict advertised inputs, structured errors, public cache hints, explicit stateless HTTP sessions, refreshed tooling, and contributor metadata.
