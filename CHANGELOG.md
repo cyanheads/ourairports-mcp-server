@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.4](changelog/0.2.x/0.2.4.md) — 2026-09-23
+
+Find tools report pre-limit totals, navaids and runways gain upstream fields, and shared-code resolution notes and text output are corrected.
+
 ## [0.2.3](changelog/0.2.x/0.2.3.md) — 2026-09-19 · ⚠️ Breaking
 
 HTTP starts stateless by default, core improves tool input and error guidance, and development skills move to framework-skills/.
