@@ -13,6 +13,7 @@ import { resource, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import {
   AirportSummarySchema,
+  buildResolutionNote,
   FrequencySchema,
   RunwaySchema,
   toAirportSummary,
@@ -60,7 +61,9 @@ export const airportResource = resource('airport://{code}', {
       ),
     resolutionNote: z
       .string()
-      .describe('How the code resolved, with an ambiguity note for shared national codes.'),
+      .describe(
+        "How the code resolved: the identifier space that matched and, when other airports carry the same code, why this one won (resolution priority or dataset row order) and each other airport's ident, country, and code space — read airport://{ident} with that ident to fetch it.",
+      ),
     runways: z
       .array(RunwaySchema)
       .describe('Runways for the airport (empty array when none recorded).'),
@@ -79,17 +82,14 @@ export const airportResource = resource('airport://{code}', {
       });
     }
 
-    const { airport, resolvedVia, ambiguous } = resolution;
+    const { airport, resolvedVia } = resolution;
     const country = svc.country(airport.isoCountry);
     const region = svc.region(airport.isoRegion);
-    const resolutionNote = ambiguous
-      ? `Resolved via ${resolvedVia}. "${params.code.toUpperCase()}" is a national code shared by more than one airport; the first match was returned. Re-query with the IATA or ICAO code, or the ident "${airport.ident}", if this is not the expected airport.`
-      : `Resolved via ${resolvedVia}.`;
 
     return {
       airport: toAirportSummary(airport, country?.name, region?.name),
       resolvedVia,
-      resolutionNote,
+      resolutionNote: buildResolutionNote(params.code, resolution),
       runways: svc.runwaysForAirport(airport.id).map(toRunway),
       frequencies: svc.frequenciesForAirport(airport.id).map(toFrequency),
     };

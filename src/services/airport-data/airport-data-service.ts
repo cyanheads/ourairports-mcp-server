@@ -18,18 +18,20 @@ import { join } from 'node:path';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
-import { bool, compact, forEachRow, int, num, reqInt, reqStr, str } from './csv.js';
+import { bool, compact, forEachRow, int, num, positiveInt, reqInt, reqStr, str } from './csv.js';
 import { resolveBundledDataDir } from './data-dir.js';
 import { bearingDeg, nearest } from './geo.js';
 import type {
   Airport,
-  AirportWithDistance,
+  AirportNavaidsResult,
+  CodeHolder,
   CodeResolution,
   Country,
   CountrySummary,
   Frequency,
   Navaid,
-  NavaidWithDistance,
+  NearbyAirportsResult,
+  NearbyNavaidsResult,
   Region,
   RegionSummary,
   ResolvedVia,
@@ -98,8 +100,12 @@ export class AirportDataService {
   private readonly codeIndex = new Map<string, number>();
   /** Which code space each codeIndex entry came from — for the resolution note. */
   private readonly codeVia = new Map<string, ResolvedVia>();
-  /** Code strings that map to >1 airport in gps/local space (ambiguity flag). */
-  private readonly ambiguousCodes = new Set<string>();
+  /**
+   * Code strings carried by more than one airport → every airport OTHER than
+   * the codeIndex winner, with the spaces it carries the string in. Only shared
+   * codes get an entry (~3.9k of ~111k keys).
+   */
+  private readonly sharedCodeHolders = new Map<string, CodeHolder[]>();
   private readonly runwaysByAirportRef = new Map<number, Runway[]>();
   private readonly frequenciesByAirportRef = new Map<number, Frequency[]>();
   private readonly navaidsByAirportIdent = new Map<string, Navaid[]>();
@@ -278,13 +284,12 @@ export class AirportDataService {
    * and `local_code` — each pass insert-if-absent over airports in CSV row
    * order. Idents are globally unique, so pass 1 is collision-free and a unique
    * ident can never be shadowed by an earlier-row airport's national (gps/local)
-   * code (#2). The previous per-airport loop claimed keys in row order, letting
-   * a low-priority `local_code` from an early row pre-empt a later row's
-   * high-priority `ident`.
+   * code (#2).
    *
-   * Ambiguity semantics are unchanged: a code claimed by one airport that also
-   * appears as any code of a *different* airport is flagged — the collision is
-   * simply caught in a later pass rather than at per-airport insert time.
+   * A string already claimed by a *different* airport records that airport as
+   * a holder of the shared code, with the space it carries it in — so the
+   * resolution note can name every other airport and say whether priority or
+   * row order (a tie within the winner's own space) decided the match.
    */
   private buildCodeIndex(): void {
     for (const { via, key } of CODE_PRIORITY) {
@@ -293,15 +298,26 @@ export class AirportDataService {
         if (typeof raw !== 'string' || raw.length === 0) continue;
         const upper = raw.toUpperCase();
         const claimedBy = this.codeIndex.get(upper);
-        if (claimedBy !== undefined) {
-          // A different airport already claimed this string in a higher pass.
-          if (claimedBy !== airport.id) this.ambiguousCodes.add(upper);
-          continue;
+        if (claimedBy === undefined) {
+          this.codeIndex.set(upper, airport.id);
+          this.codeVia.set(upper, via);
+        } else if (claimedBy !== airport.id) {
+          this.addSharedHolder(upper, airport, via);
         }
-        this.codeIndex.set(upper, airport.id);
-        this.codeVia.set(upper, via);
       }
     }
+  }
+
+  /** Record `airport` as carrying the shared code `upper` in space `via`. */
+  private addSharedHolder(upper: string, airport: Airport, via: ResolvedVia): void {
+    const holders = this.sharedCodeHolders.get(upper);
+    if (!holders) {
+      this.sharedCodeHolders.set(upper, [{ airport, spaces: [via] }]);
+      return;
+    }
+    const existing = holders.find((h) => h.airport.id === airport.id);
+    if (existing) existing.spaces.push(via);
+    else holders.push({ airport, spaces: [via] });
   }
 
   private indexTokens(airport: Airport): void {
@@ -379,11 +395,13 @@ export class AirportDataService {
         latitudeDeg: lat,
         longitudeDeg: lon,
         ...compact({
-          frequencyKhz: int(r.get('frequency_khz')),
+          // Upstream writes -1 for an unknown frequency (closed navaids).
+          frequencyKhz: positiveInt(r.get('frequency_khz')),
           elevationFt: int(r.get('elevation_ft')),
           isoCountry: str(r.get('iso_country')),
-          dmeFrequencyKhz: int(r.get('dme_frequency_khz')),
+          dmeFrequencyKhz: positiveInt(r.get('dme_frequency_khz')),
           dmeChannel: str(r.get('dme_channel')),
+          slavedVariationDeg: num(r.get('slaved_variation_deg')),
           magneticVariationDeg: num(r.get('magnetic_variation_deg')),
           usageType: str(r.get('usageType')),
           power: str(r.get('power')),
@@ -413,9 +431,9 @@ export class AirportDataService {
 
   /**
    * Resolve a code (any of IATA/ICAO/GPS/local/ident, case-insensitive) to its
-   * airport. Returns the match plus which code space hit and whether the code
-   * string is shared across airports in gps/local space. Returns `undefined`
-   * when no code matches (the tool turns that into `unknown_code`).
+   * airport. Returns the match, which code space hit, and every other airport
+   * carrying the same string in any space. Returns `undefined` when no code
+   * matches (the tool turns that into `unknown_code`).
    */
   resolveByCode(code: string): CodeResolution | undefined {
     const upper = code.trim().toUpperCase();
@@ -427,7 +445,7 @@ export class AirportDataService {
     return {
       airport,
       resolvedVia: this.codeVia.get(upper) ?? 'ident',
-      ambiguous: this.ambiguousCodes.has(upper),
+      sharedWith: this.sharedCodeHolders.get(upper) ?? [],
     };
   }
 
@@ -549,7 +567,8 @@ export class AirportDataService {
   /**
    * Airports within `radiusKm` of a coordinate, nearest-first by great-circle
    * distance, filtered by type/closed, capped at `limit`. Each carries its
-   * distance and bearing from the query point.
+   * distance and bearing from the query point; `totalMatched` counts every
+   * filtered in-radius airport before the cap.
    */
   nearbyAirports(
     lat: number,
@@ -558,7 +577,7 @@ export class AirportDataService {
     limit: number,
     type: string | undefined,
     includeClosed: boolean,
-  ): AirportWithDistance[] {
+  ): NearbyAirportsResult {
     const accept = (i: number): boolean => {
       const id = this.airportCoordIds[i];
       if (id === undefined) return false;
@@ -568,20 +587,24 @@ export class AirportDataService {
       if (type && airport.type !== type) return false;
       return true;
     };
-    const hits = nearest(this.airportCoords, lat, lon, radiusKm, limit, accept);
-    return hits.map((h) => {
-      const airport = this.airportsById.get(this.airportCoordIds[h.index] as number) as Airport;
-      return {
-        airport,
-        distanceKm: h.distanceKm,
-        bearingDeg: bearingDeg(lat, lon, airport.latitudeDeg, airport.longitudeDeg),
-      };
-    });
+    const { hits, total } = nearest(this.airportCoords, lat, lon, radiusKm, limit, accept);
+    return {
+      airports: hits.map((h) => {
+        const airport = this.airportsById.get(this.airportCoordIds[h.index] as number) as Airport;
+        return {
+          airport,
+          distanceKm: h.distanceKm,
+          bearingDeg: bearingDeg(lat, lon, airport.latitudeDeg, airport.longitudeDeg),
+        };
+      }),
+      totalMatched: total,
+    };
   }
 
   /**
    * Navaids within `radiusKm` of a coordinate, nearest-first, optionally
-   * filtered by navaid type, capped at `limit`.
+   * filtered by navaid type, capped at `limit`; `totalMatched` counts every
+   * type-filtered in-radius navaid before the cap.
    */
   nearbyNavaids(
     lat: number,
@@ -589,32 +612,36 @@ export class AirportDataService {
     radiusKm: number,
     limit: number,
     type: string | undefined,
-  ): NavaidWithDistance[] {
+  ): NearbyNavaidsResult {
     const accept = (i: number): boolean => {
       if (!type) return true;
       const navaid = this.navaidList[i];
       return navaid?.type === type;
     };
-    const hits = nearest(this.navaidCoords, lat, lon, radiusKm, limit, accept);
-    return hits.map((h) => {
-      const navaid = this.navaidList[h.index] as Navaid;
-      return {
-        navaid,
-        distanceKm: h.distanceKm,
-        bearingDeg: bearingDeg(lat, lon, navaid.latitudeDeg, navaid.longitudeDeg),
-      };
-    });
+    const { hits, total } = nearest(this.navaidCoords, lat, lon, radiusKm, limit, accept);
+    return {
+      navaids: hits.map((h) => {
+        const navaid = this.navaidList[h.index] as Navaid;
+        return {
+          navaid,
+          distanceKm: h.distanceKm,
+          bearingDeg: bearingDeg(lat, lon, navaid.latitudeDeg, navaid.longitudeDeg),
+        };
+      }),
+      totalMatched: total,
+    };
   }
 
   /**
    * Navaids associated with an airport ident, optionally filtered by type,
-   * capped at `limit`. Returns `[]` when the airport has no associated navaids
-   * (the tool distinguishes this from "airport not found").
+   * capped at `limit`, with the type-filtered total before the cap. An empty
+   * list means the airport has no associated navaids (the tool distinguishes
+   * this from "airport not found").
    */
-  navaidsForAirport(ident: string, type: string | undefined, limit: number): Navaid[] {
+  navaidsForAirport(ident: string, type: string | undefined, limit: number): AirportNavaidsResult {
     const all = this.navaidsByAirportIdent.get(ident.toUpperCase()) ?? [];
     const filtered = type ? all.filter((n) => n.type === type) : all;
-    return filtered.slice(0, limit);
+    return { navaids: filtered.slice(0, limit), totalMatched: filtered.length };
   }
 
   /**

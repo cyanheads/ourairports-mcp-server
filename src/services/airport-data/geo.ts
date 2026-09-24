@@ -1,7 +1,8 @@
 /**
  * @fileoverview Great-circle geospatial helpers for the nearest-neighbour
- * scans. Brute-force haversine over a flat coordinate array is sub-millisecond
- * at this dataset's scale (~85k airports, ~11k navaids), so no spatial index.
+ * scans. Brute-force haversine over a flat coordinate array takes a few
+ * milliseconds at this dataset's scale (~85k airports, ~11k navaids), so no
+ * spatial index.
  * @module src/services/airport-data/geo
  */
 
@@ -35,11 +36,19 @@ export interface DistanceHit {
   index: number;
 }
 
+/** The nearest in-radius hits (capped) and how many matched before the cap. */
+export interface NearestResult {
+  hits: DistanceHit[];
+  /** In-radius entries that passed `accept`, counted before the `limit` cap. */
+  total: number;
+}
+
 /**
  * Scan a flat `[lat, lon, lat, lon, …]` coordinate array, keep entries within
  * `radiusKm` that pass `accept(index)`, and return the nearest `limit` by
- * distance. Sorts only the surviving in-radius set (typically small), not the
- * whole corpus.
+ * distance plus the pre-limit match count. Sorts only the surviving in-radius
+ * set (typically small), not the whole corpus; the count is that set's length
+ * before it is truncated in place, so it costs no allocation.
  */
 export function nearest(
   coords: Float64Array,
@@ -48,7 +57,7 @@ export function nearest(
   radiusKm: number,
   limit: number,
   accept: (index: number) => boolean,
-): DistanceHit[] {
+): NearestResult {
   const hits: DistanceHit[] = [];
   const count = coords.length / 2;
   for (let i = 0; i < count; i++) {
@@ -58,6 +67,8 @@ export function nearest(
     const d = haversineKm(originLat, originLon, lat, lon);
     if (d <= radiusKm) hits.push({ index: i, distanceKm: d });
   }
+  const total = hits.length;
   hits.sort((a, b) => a.distanceKm - b.distanceKm);
-  return hits.slice(0, limit);
+  if (total > limit) hits.length = limit;
+  return { hits, total };
 }

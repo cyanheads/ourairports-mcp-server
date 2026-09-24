@@ -9,6 +9,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
 import { CONTINENTS } from '@/services/airport-data/types.js';
+import { escapeMarkdown } from './_schemas.js';
 
 const RegionSchema = z
   .object({
@@ -102,11 +103,14 @@ export const listCountriesTool = tool('ourairports_list_countries', {
     const lines = [`## Countries (${result.countries.length})`];
     for (const c of result.countries) {
       lines.push(
-        `- **${c.code}** ${c.name}${c.continent ? ` (${c.continent})` : ''} — ${c.airportCount} airports`,
+        `- **${escapeMarkdown(c.code)}** ${escapeMarkdown(c.name)}${c.continent ? ` (${escapeMarkdown(c.continent)})` : ''} — ${c.airportCount} airports`,
       );
       if (c.regions) {
         for (const r of c.regions) {
-          lines.push(`  - ${r.code} ${r.name} — ${r.airportCount} airports`);
+          // The region code opens the list item, so block markers are escaped too.
+          lines.push(
+            `  - ${escapeMarkdown(r.code, 'line-start')} ${escapeMarkdown(r.name)} — ${r.airportCount} airports`,
+          );
         }
       }
     }

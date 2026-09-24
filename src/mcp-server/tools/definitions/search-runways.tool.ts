@@ -15,6 +15,9 @@ import {
   AirportSummarySchema,
   RunwaySchema,
   renderAirportLines,
+  renderRunwayEnds,
+  renderRunwayName,
+  renderRunwaySpec,
   toAirportSummary,
   toRunway,
 } from './_schemas.js';
@@ -22,7 +25,7 @@ import {
 export const searchRunwaysTool = tool('ourairports_search_runways', {
   title: 'ourairports-mcp-server',
   description:
-    'Search runways across the whole bundled OurAirports corpus by attribute, joined back to their airports — the cross-airport counterpart to ourairports_get_airport (which returns runways for one already-known airport). Filter by airport facets (country, region, type) and runway facets (surface, min_length_ft, min_width_ft, lighted). Returns one flat {airport, runway} row per matching runway, so an airport with three matching runways contributes three rows. `surface` is a case-insensitive substring match against the raw upstream surface string, not an exact code — the runway surface must CONTAIN your text, so a shorter fragment matches more variants (no controlled vocabulary: "asp" matches ASP, ASPH, and Asphalt). A runway whose length or width is unknown is excluded when the matching min_*_ft filter is set — the data can never confirm it meets the threshold. Closed airports and closed runways are both excluded unless their include_* flag is set. Use ourairports_list_countries for valid country/region codes. OurAirports is community-edited — not authoritative for flight operations.',
+    'Search runways across the whole bundled OurAirports corpus by attribute, joined back to their airports — the cross-airport counterpart to ourairports_get_airport (which returns runways for one already-known airport). Filter by airport facets (country, region, type) and runway facets (surface, min_length_ft, min_width_ft, lighted). Returns one flat {airport, runway} row per matching runway, so an airport with three matching runways contributes three rows. `surface` is a case-insensitive substring match against the raw upstream surface string, not an exact code — the runway surface must CONTAIN your text, so a shorter fragment matches more variants (no controlled vocabulary: "asp" matches ASP, ASPH, and Asphalt). Lengths are the full runway surface, including displaced thresholds and overruns — not usable takeoff or landing distance; each runway also reports its displaced threshold per end. A runway whose length or width is unknown is excluded when the matching min_*_ft filter is set — the data can never confirm it meets the threshold. Closed airports and closed runways are both excluded unless their include_* flag is set. Use ourairports_list_countries for valid country/region codes. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   input: z.object({
@@ -53,7 +56,7 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       .min(0)
       .optional()
       .describe(
-        'Minimum runway length in feet (inclusive). Runways with an unknown length are excluded when this is set, never assumed to pass.',
+        'Minimum length of the full runway surface in feet (inclusive), matched against lengthFt — which includes displaced thresholds and overruns, so this is not a usable-distance filter. Runways with an unknown length are excluded when this is set, never assumed to pass.',
       ),
     min_width_ft: z
       .number()
@@ -104,7 +107,7 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
               'The airport this runway belongs to. Codes the airport lacks are null.',
             ),
             runway: RunwaySchema.describe(
-              'The matching runway — dimensions, surface, lighting, end designators, and headings.',
+              'The matching runway — full-surface dimensions, surface, lighting, and per-end designators, headings, and displaced thresholds.',
             ),
           })
           .describe('A runway paired with its airport (one row per matching runway).'),
@@ -192,18 +195,12 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
   },
 
   format: (result) => {
-    const dash = (v: string | number | null) => (v == null ? '—' : String(v));
     const lines = [`## Runway Search — ${result.runways.length} shown`];
     for (const { airport, runway: r } of result.runways) {
-      const ends = [r.leIdent, r.heIdent].filter(Boolean).join('/') || 'unnamed';
       lines.push('');
       lines.push(...renderAirportLines(airport));
-      lines.push(
-        `  **Runway ${ends}** (id ${r.id}) — length ${dash(r.lengthFt)} ft × width ${dash(r.widthFt)} ft | surface: ${dash(r.surface)} | lighted: ${r.lighted ? 'yes' : 'no'} | closed: ${r.closed ? 'yes' : 'no'}`,
-      );
-      lines.push(
-        `  headings (true): ${dash(r.leIdent)} ${dash(r.leHeadingDegT)}° / ${dash(r.heIdent)} ${dash(r.heHeadingDegT)}°`,
-      );
+      lines.push(`  **Runway ${renderRunwayName(r)}** ${renderRunwaySpec(r)}`);
+      lines.push(`  ${renderRunwayEnds(r)}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

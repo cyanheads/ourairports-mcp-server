@@ -8,6 +8,7 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { AirportDataService } from '@/services/airport-data/airport-data-service.js';
+import { nearest } from '@/services/airport-data/geo.js';
 import { loadFixtureService } from '../fixtures/load.js';
 
 let svc: AirportDataService;
@@ -43,7 +44,7 @@ describe('code resolution across identifier spaces', () => {
     const r = svc.resolveByCode('SEA');
     expect(r?.airport.ident).toBe('KSEA');
     expect(r?.resolvedVia).toBe('iata_code');
-    expect(r?.ambiguous).toBe(false);
+    expect(r?.sharedWith).toEqual([]);
   });
 
   it('resolves by ICAO', () => {
@@ -63,30 +64,30 @@ describe('code resolution across identifier spaces', () => {
     expect(svc.resolveByCode('')).toBeUndefined();
   });
 
-  it('flags gps/local collisions as ambiguous (HBE in US and AR)', () => {
+  it('records the other holder of a gps/local collision (HBE in US and AR)', () => {
     const r = svc.resolveByCode('HBE');
     expect(r).toBeDefined();
-    expect(r?.ambiguous).toBe(true);
+    expect(r?.sharedWith.map((h) => h.airport.isoCountry)).toEqual(['AR']);
     // First in CSV order (US row) wins.
     expect(r?.airport.isoCountry).toBe('US');
   });
 
-  it('keeps globally-unique IATA/ICAO non-ambiguous', () => {
-    expect(svc.resolveByCode('JFK')?.ambiguous).toBe(false);
-    expect(svc.resolveByCode('KJFK')?.ambiguous).toBe(false);
+  it('keeps globally-unique IATA/ICAO unshared', () => {
+    expect(svc.resolveByCode('JFK')?.sharedWith).toEqual([]);
+    expect(svc.resolveByCode('KJFK')?.sharedWith).toEqual([]);
   });
 
   // Regression for #2: a globally-unique ident must never be shadowed by an
   // EARLIER CSV row's gps/local code. The fixture seeds three shadow pairs where
   // the earlier row claims the string in national-code space; global priority
   // passes register every ident before any national code, so the ident-owner
-  // wins while the collision is still flagged ambiguous.
+  // wins while the other airport is still recorded as a holder of the code.
   it('resolves 5MO to its ident-owner (Plattsburg), not the local_code shadow (Applegate, 15MO)', () => {
     const r = svc.resolveByCode('5MO');
     expect(r?.airport.ident).toBe('5MO');
     expect(r?.airport.name).toBe('Plattsburg Airpark');
     expect(r?.resolvedVia).toBe('ident');
-    expect(r?.ambiguous).toBe(true); // 15MO still carries 5MO as its local_code
+    expect(r?.sharedWith.map((h) => h.airport.ident)).toEqual(['15MO']); // 15MO still carries 5MO as its local_code
   });
 
   it('resolves 1A8 to its ident-owner (Empire), not the gps_code shadow (Goldfield, 0L5)', () => {
@@ -94,7 +95,7 @@ describe('code resolution across identifier spaces', () => {
     expect(r?.airport.ident).toBe('1A8');
     expect(r?.airport.name).toBe('Empire Airport');
     expect(r?.resolvedVia).toBe('ident');
-    expect(r?.ambiguous).toBe(true);
+    expect(r?.sharedWith.map((h) => h.airport.ident)).toEqual(['0L5']);
   });
 
   it('resolves ERT to its ident-owner (Erdenet), not the local_code shadow (Estancia, AR-0143)', () => {
@@ -102,7 +103,45 @@ describe('code resolution across identifier spaces', () => {
     expect(r?.airport.ident).toBe('ERT');
     expect(r?.airport.name).toBe('Erdenet Airport');
     expect(r?.resolvedVia).toBe('ident');
-    expect(r?.ambiguous).toBe(true);
+    expect(r?.sharedWith.map((h) => h.airport.ident)).toEqual(['AR-0143']);
+  });
+});
+
+describe('shared-code holders', () => {
+  const holders = (code: string) =>
+    svc.resolveByCode(code)?.sharedWith.map((h) => `${h.airport.ident}:${h.spaces.join('+')}`);
+
+  it('is empty for a code on one airport, however many of its spaces carry it', () => {
+    expect(holders('KSEA')).toEqual([]);
+    expect(holders('SEA')).toEqual([]);
+    expect(holders('00AA')).toEqual([]);
+  });
+
+  it('lists every other airport with each space it carries the code in', () => {
+    expect(holders('HBE')).toEqual(['SAHBE:gps_code+local_code']);
+    expect(holders('1A8')).toEqual(['0L5:gps_code+local_code']);
+    expect(holders('GIG')).toEqual(['SBGL:iata_code']);
+    expect(holders('LGTL')).toEqual(['GR-0109:icao_code']);
+    expect(holders('AKA')).toEqual(['ABP:local_code']);
+  });
+
+  it('lists same-space tie losers in dataset row order (HBI)', () => {
+    const r = svc.resolveByCode('HBI');
+    expect(r?.airport.ident).toBe('AR-0572');
+    expect(r?.resolvedVia).toBe('local_code');
+    expect(holders('HBI')).toEqual(['AYHH:local_code', 'KHBI:local_code']);
+  });
+
+  it('resolves every listed holder by its own ident (the recovery the note suggests)', () => {
+    for (const code of ['HBE', 'HBI', 'GIG', 'LGTL', 'AKA', '5MO', '1A8', 'ERT']) {
+      const sharedWith = svc.resolveByCode(code)?.sharedWith;
+      expect(sharedWith?.length).toBeGreaterThan(0);
+      for (const holder of sharedWith ?? []) {
+        const r = svc.resolveByCode(holder.airport.ident);
+        expect(r?.airport.id).toBe(holder.airport.id);
+        expect(r?.resolvedVia).toBe('ident');
+      }
+    }
   });
 });
 
@@ -134,7 +173,7 @@ describe('runway and frequency joins', () => {
 describe('nearbyAirports (haversine)', () => {
   it('ranks nearest-first and computes distance/bearing', () => {
     // Near Seattle — KSEA and KBFI are ~7 km apart.
-    const hits = svc.nearbyAirports(47.45, -122.31, 100, 10, undefined, false);
+    const { airports: hits } = svc.nearbyAirports(47.45, -122.31, 100, 10, undefined, false);
     expect(hits.length).toBeGreaterThanOrEqual(2);
     expect(hits[0]?.airport.ident).toBe('KSEA');
     expect(hits[0]?.distanceKm).toBeLessThan(hits[1]?.distanceKm as number);
@@ -144,49 +183,118 @@ describe('nearbyAirports (haversine)', () => {
 
   it('excludes closed airports by default and includes them on opt-in', () => {
     const withoutClosed = svc.nearbyAirports(47.5, -122.4, 50, 50, undefined, false);
-    expect(withoutClosed.some((h) => h.airport.type === 'closed')).toBe(false);
+    expect(withoutClosed.airports.some((h) => h.airport.type === 'closed')).toBe(false);
     const withClosed = svc.nearbyAirports(47.5, -122.4, 50, 50, undefined, true);
-    expect(withClosed.some((h) => h.airport.ident === 'CLOSEDX')).toBe(true);
+    expect(withClosed.airports.some((h) => h.airport.ident === 'CLOSEDX')).toBe(true);
   });
 
   it('respects the radius and the type filter', () => {
     const far = svc.nearbyAirports(0, 0, 100, 10, undefined, false);
-    expect(far).toHaveLength(0);
+    expect(far).toEqual({ airports: [], totalMatched: 0 });
     const onlyLarge = svc.nearbyAirports(47.45, -122.31, 200, 10, 'large_airport', false);
-    expect(onlyLarge.every((h) => h.airport.type === 'large_airport')).toBe(true);
+    expect(onlyLarge.airports.every((h) => h.airport.type === 'large_airport')).toBe(true);
+  });
+
+  it('reports the filtered in-radius total before the limit (#11)', () => {
+    const capped = svc.nearbyAirports(47.45, -122.31, 100, 1, undefined, false);
+    expect(capped.airports.map((h) => h.airport.ident)).toEqual(['KSEA']);
+    expect(capped.totalMatched).toBe(2);
+    expect(svc.nearbyAirports(47.45, -122.31, 100, 1, undefined, true).totalMatched).toBe(3);
+    expect(svc.nearbyAirports(47.45, -122.31, 100, 1, 'large_airport', false).totalMatched).toBe(1);
+    const all = svc.nearbyAirports(47.45, -122.31, 100, 2, undefined, false);
+    expect(all.airports).toHaveLength(2);
+    expect(all.totalMatched).toBe(2);
   });
 });
 
 describe('navaids', () => {
   it('stores frequency in kHz for all types', () => {
-    const navaids = svc.navaidsForAirport('KSEA', undefined, 20);
+    const { navaids } = svc.navaidsForAirport('KSEA', undefined, 20);
     expect(navaids).toHaveLength(1);
     expect(navaids[0]?.type).toBe('VORTAC');
     expect(navaids[0]?.frequencyKhz).toBe(116800); // 116.8 MHz stored as kHz
   });
 
   it('finds navaids near a coordinate, nearest-first', () => {
-    const hits = svc.nearbyNavaids(47.45, -122.31, 200, 20, undefined);
+    const { navaids: hits } = svc.nearbyNavaids(47.45, -122.31, 200, 20, undefined);
     expect(hits.length).toBeGreaterThanOrEqual(1);
     expect(hits[0]?.navaid.ident).toBe('SEA');
     expect(hits[0]?.distanceKm).toBeLessThanOrEqual(hits[hits.length - 1]?.distanceKm as number);
   });
 
   it('filters navaids by type', () => {
-    const ndbs = svc.nearbyNavaids(40.633, -73.778, 100, 20, 'NDB');
+    const { navaids: ndbs } = svc.nearbyNavaids(40.633, -73.778, 100, 20, 'NDB');
     expect(ndbs.every((h) => h.navaid.type === 'NDB')).toBe(true);
     expect(ndbs.some((h) => h.navaid.ident === 'JFK')).toBe(true);
   });
 
   it('returns empty list for an airport with no associated navaids', () => {
     // 00AA has no navaid linking to it.
-    expect(svc.navaidsForAirport('00AA', undefined, 20)).toEqual([]);
+    expect(svc.navaidsForAirport('00AA', undefined, 20)).toEqual({ navaids: [], totalMatched: 0 });
   });
 
   it('does not index standalone navaids (empty associated_airport) under any airport', () => {
     // NDLS is enroute with no associated_airport — only reachable via coordinate mode.
     const coord = svc.nearbyNavaids(40.0, -160.0, 50, 20, undefined);
-    expect(coord.some((h) => h.navaid.ident === 'NDLS')).toBe(true);
+    expect(coord.navaids.some((h) => h.navaid.ident === 'NDLS')).toBe(true);
+  });
+
+  it('reports the in-radius and associated totals before the limit (#11)', () => {
+    const coord = svc.nearbyNavaids(40.6413, -73.7781, 60, 1, undefined);
+    expect(coord.navaids.map((h) => h.navaid.ident)).toEqual(['JFK']);
+    expect(coord.totalMatched).toBe(4);
+    expect(svc.nearbyNavaids(40.6413, -73.7781, 60, 1, 'NDB').totalMatched).toBe(3);
+
+    const airport = svc.navaidsForAirport('kjfk', undefined, 1);
+    expect(airport.navaids.map((n) => n.ident)).toEqual(['JFK']);
+    expect(airport.totalMatched).toBe(2);
+    expect(svc.navaidsForAirport('KJFK', 'VOR-DME', 1).totalMatched).toBe(1);
+  });
+
+  it('parses slaved_variation_deg and keeps a stored 0 (#18)', () => {
+    const sea = svc.navaidsForAirport('KSEA', undefined, 1).navaids[0];
+    expect(sea?.slavedVariationDeg).toBe(18.5);
+    expect(sea?.magneticVariationDeg).toBe(16.123);
+    const rdg = svc.nearbyNavaids(49.040298461899994, 12.5264997482, 1, 1, undefined).navaids[0];
+    expect(rdg?.navaid.slavedVariationDeg).toBe(0);
+    const ndls = svc.nearbyNavaids(40.0, -160.0, 1, 1, undefined).navaids[0];
+    expect(ndls?.navaid.slavedVariationDeg).toBeUndefined();
+  });
+
+  it('drops non-positive placeholder frequencies at parse time (#14)', () => {
+    const bik = svc
+      .nearbyNavaids(-34.18, 150.1, 30, 10, 'NDB')
+      .navaids.map((h) => h.navaid)
+      .find((n) => n.ident === 'BIK');
+    expect(bik).toBeDefined();
+    expect(bik?.frequencyKhz).toBeUndefined();
+    const mqd = svc.nearbyNavaids(-33.108299255371, 151.13900756836, 1, 1, 'VOR').navaids[0];
+    expect(mqd?.navaid.frequencyKhz).toBeUndefined();
+  });
+});
+
+describe('nearest() pre-limit count (#11)', () => {
+  // Three points on the equator at 0°, 1°, and 2° east (~111 km apart) plus one far away.
+  const coords = new Float64Array([0, 2, 0, 0, 0, 1, 50, 50]);
+
+  it('returns the nearest `limit` hits and the in-radius count before the slice', () => {
+    const { hits, total } = nearest(coords, 0, 0, 300, 2, () => true);
+    expect(hits.map((h) => h.index)).toEqual([1, 2]);
+    expect(total).toBe(3);
+  });
+
+  it('counts only accepted in-radius entries', () => {
+    expect(nearest(coords, 0, 0, 300, 1, (i) => i !== 2).total).toBe(2);
+    expect(nearest(coords, 0, 0, 50, 10, () => true)).toEqual({
+      hits: [{ index: 1, distanceKm: 0 }],
+      total: 1,
+    });
+  });
+
+  it('returns every hit when the limit is at or above the count', () => {
+    const { hits, total } = nearest(coords, 0, 0, 300, 3, () => true);
+    expect(hits).toHaveLength(3);
+    expect(total).toBe(3);
   });
 });
 
@@ -197,8 +305,8 @@ describe('listCountries', () => {
     expect(us).toBeDefined();
     expect(us?.name).toBe('United States');
     // Non-closed US airports in the fixture: KSEA, KJFK, 00AA, 00AK, USHBE, KBFI,
-    // 15MO, 5MO, 0L5, 1A8 = 10 (CLOSEDX excluded; the four code-shadowing rows are US).
-    expect(us?.airportCount).toBe(10);
+    // 15MO, 5MO, 0L5, 1A8, KHBI = 11 (CLOSEDX excluded; the four code-shadowing rows are US).
+    expect(us?.airportCount).toBe(11);
     expect(us?.regions).toBeUndefined();
   });
 

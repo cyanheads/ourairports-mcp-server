@@ -100,12 +100,16 @@ export interface Runway {
 
 /**
  * A parsed navaid row. Frequencies are stored in kHz for ALL types
- * (VOR 114.5 MHz → 114500 kHz). `associatedAirport` (→ airports.ident) is
- * empty for ~11% of records (standalone enroute navaids).
+ * (VOR 114.5 MHz → 114500 kHz): an NDB/NDB-DME's value is its kHz tuning
+ * frequency, every other type's is a VHF or paired-VHF value. Upstream `-1`
+ * placeholder frequencies are dropped at parse time (absent = unknown).
+ * `associatedAirport` (→ airports.ident) is empty for ~33% of records
+ * (standalone enroute navaids).
  */
 export interface Navaid {
   associatedAirport?: string;
   dmeChannel?: string;
+  /** Paired VHF frequency of the DME/TACAN component, in kHz, on every type that has one. */
   dmeFrequencyKhz?: number;
   elevationFt?: number;
   frequencyKhz?: number;
@@ -114,9 +118,12 @@ export interface Navaid {
   isoCountry?: string;
   latitudeDeg: number;
   longitudeDeg: number;
+  /** Actual magnetic variation at the site, degrees, positive east. */
   magneticVariationDeg?: number;
   name: string;
   power?: string;
+  /** Variation built into the radials (VOR/VOR-DME/VORTAC/TACAN), degrees, positive east. */
+  slavedVariationDeg?: number;
   type: string;
   usageType?: string;
 }
@@ -150,15 +157,26 @@ export interface Region {
   wikipediaLink?: string;
 }
 
-/** Which identifier space a `code` resolved against, for the `resolution_note`. */
+/** Which identifier space a `code` resolved against, for the `resolutionNote`. */
 export type ResolvedVia = 'ident' | 'icao_code' | 'iata_code' | 'gps_code' | 'local_code';
+
+/** Another airport carrying a shared code string, with every space it carries it in. */
+export interface CodeHolder {
+  airport: Airport;
+  /** The code spaces this airport carries the string in, in resolution-priority order. */
+  spaces: ResolvedVia[];
+}
 
 /** Result of `resolveByCode`: the matched airport plus which space it matched. */
 export interface CodeResolution {
   airport: Airport;
-  /** True when the matched code string is shared by other airports in gps/local space. */
-  ambiguous: boolean;
   resolvedVia: ResolvedVia;
+  /**
+   * Every other airport carrying the code string in any space — listed by the
+   * highest space each carries it in, then dataset row order. Empty when the
+   * code belongs to one airport only.
+   */
+  sharedWith: CodeHolder[];
 }
 
 /** An airport summary with great-circle distance/bearing from a query point. */
@@ -173,6 +191,24 @@ export interface NavaidWithDistance {
   bearingDeg: number;
   distanceKm: number;
   navaid: Navaid;
+}
+
+/** Nearest airports within a radius (capped) plus the filtered in-radius total. */
+export interface NearbyAirportsResult {
+  airports: AirportWithDistance[];
+  totalMatched: number;
+}
+
+/** Nearest navaids within a radius (capped) plus the filtered in-radius total. */
+export interface NearbyNavaidsResult {
+  navaids: NavaidWithDistance[];
+  totalMatched: number;
+}
+
+/** Navaids associated with an airport (capped) plus the type-filtered total. */
+export interface AirportNavaidsResult {
+  navaids: Navaid[];
+  totalMatched: number;
 }
 
 /** Filters accepted by the full-text / faceted airport search. */

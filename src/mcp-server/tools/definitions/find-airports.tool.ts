@@ -16,7 +16,7 @@ import { AirportSummarySchema, renderAirportLines, toAirportSummary } from './_s
 export const findAirportsTool = tool('ourairports_find_airports', {
   title: 'ourairports-mcp-server',
   description:
-    'Find airports within a radius of a latitude/longitude, ranked nearest-first by great-circle distance, each with its distance (km) and bearing (degrees true) from the query point. The grounding tool for "nearest airport to here" — pair it with a live aviation server to fetch weather or positions for the result. Takes a coordinate only: no geocoding, so resolve place names to lat/lon upstream first (e.g. an OpenStreetMap or Open-Meteo geocode tool). Closed airports are excluded unless include_closed is set. OurAirports is community-edited — not authoritative for flight operations.',
+    'Find airports within a radius of a latitude/longitude, ranked nearest-first by great-circle distance, each with its distance (km) and bearing (degrees true) from the query point. The grounding tool for "nearest airport to here" — pair it with a live aviation server to fetch weather or positions for the result. Takes a coordinate only: no geocoding, so resolve place names to lat/lon upstream first (e.g. an OpenStreetMap or Open-Meteo geocode tool). Closed airports are excluded unless include_closed is set. totalCount is the in-radius match count before limit; a capped result says so. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   input: z.object({
@@ -78,11 +78,29 @@ export const findAirportsTool = tool('ourairports_find_airports', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Number of airports returned within the radius.'),
+    totalCount: z
+      .number()
+      .describe(
+        'Airports within the radius that pass the type and include_closed filters, counted before the limit was applied.',
+      ),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe('Present and true only when more airports matched than were returned.'),
+    shown: z
+      .number()
+      .optional()
+      .describe('Number of airports returned. Present only when results were truncated.'),
+    cap: z
+      .number()
+      .optional()
+      .describe('The limit that was applied. Present only when results were truncated.'),
     notice: z
       .string()
       .optional()
-      .describe('Guidance when no airport fell within the radius — e.g. widen radius_km.'),
+      .describe(
+        'Guidance when no airport fell within the radius or results were capped — how to widen or narrow.',
+      ),
   },
 
   handler(input, ctx) {
@@ -90,7 +108,7 @@ export const findAirportsTool = tool('ourairports_find_airports', {
     // Honor OURAIRPORTS_DEFAULT_SEARCH_LIMIT when limit is omitted, clamped to
     // this tool's own max of 50 (the config ceiling is 100) (#4).
     const limit = Math.min(input.limit ?? getServerConfig().defaultSearchLimit, 50);
-    const hits = svc.nearbyAirports(
+    const { airports: hits, totalMatched } = svc.nearbyAirports(
       input.latitude,
       input.longitude,
       input.radius_km,
@@ -99,8 +117,15 @@ export const findAirportsTool = tool('ourairports_find_airports', {
       input.include_closed,
     );
 
-    ctx.enrich.total(hits.length);
-    if (hits.length === 0) {
+    ctx.enrich.total(totalMatched);
+    // Truncation (≥ 1 shown) and the empty-radius notice are mutually exclusive.
+    if (totalMatched > hits.length) {
+      ctx.enrich.truncated({
+        shown: hits.length,
+        cap: limit,
+        guidance: `Results are nearest-first, so the omitted airports lie farther out. ${input.type ? 'Narrow radius_km or raise' : 'Narrow radius_km, add a type filter, or raise'} \`limit\` (max 50) to see more.`,
+      });
+    } else if (totalMatched === 0) {
       ctx.enrich.notice(
         `No airports within ${input.radius_km} km of ${input.latitude}, ${input.longitude}` +
           `${input.type ? ` of type ${input.type}` : ''}. Widen radius_km (max 500)` +
@@ -122,7 +147,7 @@ export const findAirportsTool = tool('ourairports_find_airports', {
   },
 
   format: (result) => {
-    const lines = [`## Nearest Airports — ${result.airports.length} within radius`];
+    const lines = [`## Nearest Airports — ${result.airports.length} shown`];
     for (const h of result.airports) {
       lines.push('');
       lines.push(`**${h.distanceKm} km** at bearing ${h.bearingDeg}°`);

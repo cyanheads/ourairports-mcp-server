@@ -14,3 +14,17 @@
 8174,"1A8","small_airport","Empire Airport",40.580025,-119.350870,3990,"NA","US","US-NV","Empire","no","","","18NV","18NV","","https://en.wikipedia.org/wiki/Empire_Airport_(Nevada)","1A8"
 38818,"AR-0143","small_airport","Estancia Don Roberto Airport",-34.001400,-65.366898,1430,"SA","AR","AR-D","Villa Mercedes","no","","","","ERT","","",""
 302496,"ERT","small_airport","Erdenet Airport",48.983056,104.150556,4200,"AS","MN","MN-035","Erdenet","no","","ERT","","","","https://fr.wikipedia.org/wiki/A%C3%A9rodrome_d%27Erdenet",""
+301645,"ABP","small_airport","Atkamba Airport",-6.06462,141.095173,150,"OC","PG","PG-WPD","Atkamba Mission","no",,"ABP",,"AKA",,"https://en.wikipedia.org/wiki/Atkamba_Airport",
+318510,"AR-0572","heliport","Centro Cívico Bicentenario Heliport",-31.42037,-64.173235,1306,"SA","AR","AR-X","Córdoba","no",,,,"HBI",,,
+312918,"AYHH","small_airport","Honinabi Airport",-6.2457,142.1771,452,"OC","PG","PG-WPD","Honinabi","no","AYHH","HNN","AYHH","HBI",,,"Honinabe"
+581,"BR-2199","small_airport","Fazenda Santa Maria Airport",-15.376891,-57.682109,630,"SA","BR","BR-MT","Lambari d`Oeste","no",,,"SBOM","MT0644",,,"SWSM"
+1503,"CA-1094","closed","Lac Etchemin Airport",46.4072,-70.501404,1500,"NA","CA","CA-QC","Lac Etchemin","no",,,,,,"https://en.wikipedia.org/wiki/Lac_Etchemin_Airport","SC5, CSC5, CSC5"
+308082,"GIG","small_airport","Black Diamond/Flying R Ranch Airport",50.645,-114.203,4060,"NA","CA","CA-AB",,"no",,,"CBD8","CBD8",,"https://en.wikipedia.org/wiki/Black_Diamond/Flying_R_Ranch_Aerodrome",
+604508,"GR-0109","medium_airport","(*)Kasteli Hellenic Air Force Base",35.191341,25.326588,1180,"EU","GR","GR-M","Kasteli","no","LGTL",,,,,"https://en.wikipedia.org/wiki/Kasteli_Airport#History_as_an_Air_Force_Base",
+20028,"KHBI","small_airport","Asheboro Regional Airport",35.65449905,-79.8946991,671,"NA","US","US-NC","Asheboro","no",,,"KHBI","HBI",,"https://en.wikipedia.org/wiki/Asheboro_Regional_Airport",
+4291,"LGTL","closed","Kasteli International Airport(Under Construction)",35.172803,25.313068,1180,"EU","GR","GR-M","Crete Island","no",,,,,"https://www.heraklion-airport.gr/en/the-new-airport","https://en.wikipedia.org/wiki/Kasteli_Airport","Καστελίου, LGTL"
+5906,"SBGL","large_airport","Rio Galeão – Tom Jobim International Airport",-22.809999,-43.250557,28,"SA","BR","BR-RJ","Rio De Janeiro","yes","SBGL","GIG","SBGL","RJ0001","https://www.riogaleao.com/passageiros","https://en.wikipedia.org/wiki/Rio_de_Janeiro-Gale%C3%A3o_International_Airport","Galeão - Antônio Carlos Jobim International Airport"
+26555,"VIDP","large_airport","Indira Gandhi International Airport",28.55563,77.09519,777,"AS","IN","IN-DL","New Delhi","yes","VIDP","DEL","VIDP",,"https://www.newdelhiairport.in/","https://en.wikipedia.org/wiki/Indira_Gandhi_International_Airport","Palam Air Force Station"
+30632,"ZLAK","small_airport","Ankang Fuqiang Airport",32.75696,108.87338,1209,"AS","CN","CN-61","Ankang (Hanbin)","yes","ZLAK","AKA","ZLAK",,,"https://en.wikipedia.org/wiki/Ankang_Fuqiang_Airport",
+38737,"AR-0062","small_airport","Escobar Aeroclub",-34.2986,-58.7989,13,"SA","AR","AR-B","Belén de Escobar","no",,,,"LEN",,,
+4018,"LELN","medium_airport","León Airport",42.590709,-5.653406,3006,"EU","ES","ES-CL","La Virgen del Camino","yes","LELN","LEN","LELN",,"https://www.aena.es/en/leon.html","https://en.wikipedia.org/wiki/Le%C3%B3n_Airport",

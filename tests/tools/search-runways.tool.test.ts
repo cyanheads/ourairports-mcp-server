@@ -2,11 +2,13 @@
  * @fileoverview Tests for ourairports_search_runways — airport + runway facet
  * filtering, the case-insensitive surface substring match, the sparse
  * length/width exclusion rule, closed-airport / closed-runway defaults,
- * truncation disclosure, the empty-result notice, and effective-output parity.
+ * truncation disclosure, the empty-result notice, effective-output parity,
+ * displaced thresholds, and escaped text / exact coordinates in content[].
  * @module tests/tools/search-runways.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import type { z } from '@cyanheads/mcp-ts-core';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
 
@@ -248,5 +250,80 @@ describe('searchRunwaysTool', () => {
     expect(text).toContain('surface:'); // runway surface line
     expect(text).toContain('headings (true):'); // runway headings line
     expect(text).toContain('CON'); // KSEA surface value rendered
+  });
+});
+
+describe('searchRunwaysTool content and displaced thresholds', () => {
+  /** Run through the public contract so content[] includes the enrichment trailer. */
+  async function call(input: z.input<typeof searchRunwaysTool.input>) {
+    const result = await runToolContract(searchRunwaysTool, input);
+    expect(result.isError).toBeFalsy();
+    const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
+    const structured = result.structuredContent as Awaited<
+      ReturnType<typeof searchRunwaysTool.handler>
+    > & {
+      totalCount: number;
+    };
+    return { text, structured };
+  }
+
+  it('renders a plain runway row byte-identically (KSEA 16L/34R)', async () => {
+    const { text } = await call({ region: 'US-WA', surface: 'con' });
+    expect(text).toContain(
+      '  **Runway 16L/34R** (id 244323) — length 11901 ft × width 150 ft | surface: CON | lighted: yes | closed: no\n  headings (true): 16L 180° / 34R 360°',
+    );
+  });
+
+  it('renders airport coordinates as the exact structuredContent numbers', async () => {
+    const { text, structured } = await call({ country: 'US', limit: 100 });
+    expect(structured.runways.length).toBeGreaterThan(0);
+    for (const { airport } of structured.runways) {
+      expect(text).toContain(`**Location:** ${airport.latitudeDeg}, ${airport.longitudeDeg} ·`);
+    }
+    expect(text).toContain('**Location:** 47.449001, -122.308998 ·');
+  });
+
+  it('carries both displaced thresholds per runway row and renders them by end ident (VIDP)', async () => {
+    const { text, structured } = await call({ country: 'IN', min_length_ft: 14000 });
+    expect(structured.runways).toHaveLength(1);
+    expect(structured.runways[0]?.runway).toMatchObject({
+      id: 271000,
+      lengthFt: 14534,
+      leDisplacedThresholdFt: 2100,
+      heDisplacedThresholdFt: 4790,
+    });
+    expect(text).toContain(
+      '  headings (true): 11R 103° / 29L 283° | displaced threshold: 11R 2100 ft / 29L 4790 ft',
+    );
+  });
+
+  it('keeps min_length_ft matching full-surface lengthFt (thresholds do not shorten it)', async () => {
+    const { structured } = await call({ country: 'IN', min_length_ft: 14534 });
+    expect(structured.runways.map((r) => r.runway.id)).toEqual([271000]);
+    const { structured: none } = await call({ country: 'IN', min_length_ft: 14535 });
+    expect(none.runways).toEqual([]);
+  });
+
+  it('returns null thresholds for empty upstream cells (never 0)', async () => {
+    const { structured } = await call({ region: 'US-WA' });
+    expect(structured.runways.length).toBeGreaterThan(0);
+    for (const { runway } of structured.runways) {
+      expect(runway.leDisplacedThresholdFt).toBeNull();
+      expect(runway.heDisplacedThresholdFt).toBeNull();
+    }
+  });
+
+  it('escapes Markdown in the surface while structuredContent keeps the raw value (CA-1094)', async () => {
+    const { text, structured } = await call({ country: 'CA', include_closed_airports: true });
+    const row = structured.runways.find((r) => r.runway.id === 249263);
+    expect(row?.runway.surface).toBe('GRASS&amp;GRAVEL');
+    expect(text).toContain('| surface: GRASS&amp;amp;GRAVEL |');
+    expect(text).toContain('headings (true): 06 —° / 24 —° | displaced threshold: 06 — / 24 —');
+  });
+
+  it('describes lengths and min_length_ft as full-surface length', () => {
+    expect(searchRunwaysTool.description).toMatch(/full runway surface/);
+    expect(searchRunwaysTool.input.shape.min_length_ft.description).toMatch(/full runway surface/);
+    expect(searchRunwaysTool.input.shape.min_length_ft.description).toMatch(/displaced thresholds/);
   });
 });

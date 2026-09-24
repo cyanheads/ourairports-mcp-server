@@ -140,6 +140,15 @@ export function int(v: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * Parsed positive integer, or `undefined` when the cell is empty, non-numeric,
+ * or ≤ 0 — for columns where upstream writes `-1` as an "unknown" placeholder.
+ */
+export function positiveInt(v: string | undefined): number | undefined {
+  const n = int(v);
+  return n !== undefined && n > 0 ? n : undefined;
+}
+
 /** Required parsed integer — throws when absent or non-numeric. */
 export function reqInt(v: string | undefined, field: string): number {
   const n = int(v);

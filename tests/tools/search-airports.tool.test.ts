@@ -1,10 +1,11 @@
 /**
  * @fileoverview Tests for ourairports_search_airports — text + facet matching,
- * ranking, closed filtering, truncation disclosure, and the empty-result notice.
+ * ranking, closed filtering, truncation disclosure, the empty-result notice,
+ * and exact coordinates / escaped text in content[].
  * @module tests/tools/search-airports.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
 
@@ -154,5 +155,28 @@ describe('searchAirportsTool', () => {
     const input = searchAirportsTool.input.parse({ query: 'x' });
     expect(input.limit).toBeUndefined(); // resolved in handler, not schema
     expect(input.include_closed).toBe(false);
+  });
+});
+
+describe('searchAirportsTool content rendering', () => {
+  it('renders every coordinate as the exact structuredContent number (KSEA 47.449001, -122.308998)', async () => {
+    const result = await runToolContract(searchAirportsTool, { query: 'Seattle' });
+    const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
+    const { airports } = result.structuredContent as Awaited<
+      ReturnType<typeof searchAirportsTool.handler>
+    >;
+    expect(airports[0]?.ident).toBe('KSEA');
+    for (const a of airports) {
+      expect(text).toContain(`**Location:** ${a.latitudeDeg}, ${a.longitudeDeg} ·`);
+    }
+    expect(text).toContain(
+      '**Location:** 47.449001, -122.308998 · elevation 433 ft · continent NA',
+    );
+  });
+
+  it('escapes an airport name in the summary line ((*)Kasteli)', async () => {
+    const result = await runToolContract(searchAirportsTool, { query: 'kasteli hellenic' });
+    const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
+    expect(text).toContain('**(\\*)Kasteli Hellenic Air Force Base** (ident GR-0109, id 604508)');
   });
 });
