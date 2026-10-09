@@ -175,7 +175,7 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
 
     // Exactly one mode. A lone latitude or longitude is also a conflict.
     if (hasAirport === hasCoord || (hasPartialCoord && !hasCoord)) {
-      throw ctx.fail('mode_conflict', undefined, { ...ctx.recoveryFor('mode_conflict') });
+      throw ctx.fail('mode_conflict');
     }
 
     if (hasCoord) {
@@ -217,10 +217,7 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
     const code = input.airport_code as string;
     const resolution = svc.resolveByCode(code);
     if (!resolution) {
-      throw ctx.fail('unknown_code', `No airport found for code "${code}".`, {
-        code,
-        ...ctx.recoveryFor('unknown_code'),
-      });
+      throw ctx.fail('unknown_code', `No airport found for code "${code}".`, { code });
     }
     const { airport } = resolution;
     const ident = airport.ident;

@@ -95,7 +95,6 @@ export const getAirportTool = tool('ourairports_get_airport', {
     if (!resolution) {
       throw ctx.fail('unknown_code', `No airport found for code "${input.code}".`, {
         code: input.code,
-        ...ctx.recoveryFor('unknown_code'),
       });
     }
 

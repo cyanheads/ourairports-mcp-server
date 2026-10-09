@@ -9,7 +9,7 @@
  */
 
 import type { z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
@@ -76,24 +76,28 @@ describe('findNavaidsTool', () => {
     expect(getEnrichment(ctx)?.notice).toMatch(/no associated navaids/);
   });
 
-  // #6: the airport-mode miss now throws via ctx.fail('unknown_code', …) at the
-  // tool boundary, so the declared recovery hint reaches data.recovery.hint
-  // (previously the service threw notFound() and bypassed ctx.recoveryFor).
-  it('throws unknown_code with the declared recovery hint for an unknown airport code', () => {
-    const ctx = ctxWithContract();
-    let thrown: unknown;
-    try {
-      findNavaidsTool.handler(findNavaidsTool.input.parse({ airport_code: 'ZZZZZZ' }), ctx);
-    } catch (e) {
-      thrown = e;
-    }
-    expect(thrown).toBeInstanceOf(McpError);
-    const err = thrown as McpError;
-    expect(err.code).toBe(JsonRpcErrorCode.NotFound);
-    const data = err.data as { reason?: string; code?: string; recovery?: { hint?: string } };
-    expect(data.reason).toBe('unknown_code');
-    expect(data.code).toBe('ZZZZZZ');
-    expect(data.recovery?.hint).toMatch(/ourairports_search_airports|ourairports_get_airport/);
+  // #6: the airport-mode miss throws via ctx.fail('unknown_code', …) at the tool
+  // boundary; the framework fills the declared recovery hint into
+  // data.recovery.hint, which the contract runner applies as production does.
+  it('fails unknown_code with the declared recovery hint for an unknown airport code', async () => {
+    const result = await runToolContract(findNavaidsTool, { airport_code: 'ZZZZZZ' });
+    expect(result.isError).toBe(true);
+    const { error } = result.structuredContent as {
+      error: {
+        code: number;
+        data: { reason?: string; code?: string; recovery?: { hint?: string } };
+      };
+    };
+    expect(error.code).toBe(JsonRpcErrorCode.NotFound);
+    expect(error.data.reason).toBe('unknown_code');
+    expect(error.data.code).toBe('ZZZZZZ');
+    expect(error.data.recovery?.hint).toBe(
+      'Verify the code with ourairports_search_airports or ourairports_get_airport, then retry airport mode.',
+    );
+    const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
+    expect(text).toContain(
+      'Recovery: Verify the code with ourairports_search_airports or ourairports_get_airport, then retry airport mode.',
+    );
   });
 
   it('throws mode_conflict when both modes supplied', () => {

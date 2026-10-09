@@ -78,7 +78,6 @@ export const airportResource = resource('airport://{code}', {
     if (!resolution) {
       throw ctx.fail('unknown_code', `No airport found for code "${params.code}".`, {
         code: params.code,
-        ...ctx.recoveryFor('unknown_code'),
       });
     }
 
