@@ -1,6 +1,6 @@
 # ourairports-mcp-server - Directory Structure
 
-Generated on: 2026-09-24 06:03:25
+Generated on: 2026-10-09 06:30:48
 
 ```text
 ourairports-mcp-server/
@@ -133,9 +133,11 @@ ourairports-mcp-server/
 │   ├── clean-mcpb.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
+│   ├── install-otel.ts
 │   ├── lint-mcp.ts
 │   ├── lint-packaging.ts
 │   ├── list-skills.ts
+│   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
 ├── src/
@@ -184,7 +186,8 @@ ourairports-mcp-server/
 │   ├── resources/
 │   │   └── airport.resource.test.ts
 │   ├── services/
-│   │   └── airport-data-service.test.ts
+│   │   ├── airport-data-service.test.ts
+│   │   └── data-dir.test.ts
 │   ├── smoke/
 │   │   └── definitions.smoke.test.ts
 │   └── tools/
