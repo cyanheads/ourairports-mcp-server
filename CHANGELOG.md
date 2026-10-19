@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.6](changelog/0.2.x/0.2.6.md) — 2026-10-18
+
+Airport filters and bounded search
+
 ## [0.2.5](changelog/0.2.x/0.2.5.md) — 2026-10-08
 
 Tool arguments sent as a numeric or boolean string, a lone string for `include`, `null` for an optional field, or an integer for `code` are repaired before validation, tool errors carry a request ID, and the Docker image installs its dependencies on the build platform (`@cyanheads/mcp-ts-core` ^0.13.6 → ^0.13.14).
