@@ -8,7 +8,11 @@
  */
 
 import type { z } from '@cyanheads/mcp-ts-core';
-import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createMockContext as createBaseContext,
+  getEnrichment,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
 
@@ -19,6 +23,8 @@ vi.mock('@/services/airport-data/airport-data-service.js', async (orig) => {
 });
 
 const { searchRunwaysTool } = await import('@/mcp-server/tools/definitions/search-runways.tool.js');
+
+const createMockContext = () => createBaseContext({ errors: searchRunwaysTool.errors });
 
 describe('searchRunwaysTool', () => {
   it('filters by country facet', async () => {

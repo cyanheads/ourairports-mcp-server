@@ -24,7 +24,7 @@ import { getAirportDataService } from '@/services/airport-data/airport-data-serv
 
 export const airportResource = resource('airport://{code}', {
   name: 'airport-record',
-  title: 'ourairports-mcp-server',
+  title: 'Airport Record',
   description:
     'A single airport record by any code (IATA / ICAO / GPS / local / OurAirports ident), with runways and radio frequencies inline. Stable-URI twin of ourairports_get_airport.',
   mimeType: 'application/json',

@@ -1,15 +1,16 @@
 /**
  * @fileoverview ourairports_list_countries — the lookup table for valid
- * country/region filter values used by ourairports_search_airports. Lists the
+ * country/region filter values used by both search tools. Lists the
  * countries present in the bundled dataset with ISO codes and airport counts,
- * optionally filtered to a continent and optionally with regions nested.
+ * optionally filtered by country and continent with regions nested.
  * @module src/mcp-server/tools/definitions/list-countries.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
 import { CONTINENTS } from '@/services/airport-data/types.js';
-import { escapeMarkdown } from './_schemas.js';
+import { CountryCodeSchema, escapeMarkdown } from './_schemas.js';
 
 const RegionSchema = z
   .object({
@@ -24,7 +25,7 @@ const CountrySchema = z
     code: z
       .string()
       .describe(
-        'ISO 3166-1 alpha-2 country code (the value to pass as `country` to ourairports_search_airports).',
+        'Country code to pass as country to ourairports_search_airports or ourairports_search_runways.',
       ),
     name: z.string().describe('Country name.'),
     continent: z
@@ -42,12 +43,23 @@ const CountrySchema = z
   .describe('A country present in the dataset, with its non-closed airport count and ISO code.');
 
 export const listCountriesTool = tool('ourairports_list_countries', {
-  title: 'ourairports-mcp-server',
+  title: 'List Countries',
   description:
-    "List the countries present in the bundled OurAirports dataset with their ISO 3166-1 alpha-2 codes and airport counts. This is the lookup table for valid `country` (and, with include_regions, `region`) filter values used by ourairports_search_airports. Optionally restrict to a continent or nest each country's regions. Counts exclude closed airports.",
+    "List countries and valid country/region filter codes for ourairports_search_airports and ourairports_search_runways, with airport counts excluding closed airports. Restrict to country for one country's regions; country and continent combine as AND. include_regions without a scope returns the entire region table, so prefer country for a one-country lookup. Unscoped and continent-only requests remain available.",
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
+  errors: [
+    {
+      reason: 'unknown_country',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'The country code is absent from the bundled country table.',
+      recovery:
+        'Call ourairports_list_countries without country to discover valid country codes, then retry.',
+    },
+  ],
+
   input: z.object({
+    country: CountryCodeSchema,
     continent: z
       .enum(CONTINENTS)
       .optional()
@@ -71,15 +83,18 @@ export const listCountriesTool = tool('ourairports_list_countries', {
     notice: z
       .string()
       .optional()
-      .describe('Guidance when the continent filter matched no countries.'),
+      .describe('Guidance when the country and/or continent filters matched no countries.'),
   },
 
   handler(input, ctx) {
-    const countries = getAirportDataService().listCountries(input.continent, input.include_regions);
+    const svc = getAirportDataService();
+    if (input.country && !svc.country(input.country))
+      throw ctx.fail('unknown_country', `Unknown country code "${input.country}".`);
+    const countries = svc.listCountries(input.continent, input.include_regions, input.country);
     ctx.enrich.total(countries.length);
     if (countries.length === 0) {
       ctx.enrich.notice(
-        `No countries found for continent "${input.continent}". Call ourairports_list_countries without a continent filter to see all available continents and countries.`,
+        `No countries found${input.country ? ` for country "${input.country}"` : ''}${input.continent ? ` in continent "${input.continent}"` : ''}. Call ourairports_list_countries without filters to see all available continents and countries.`,
       );
     }
     return {

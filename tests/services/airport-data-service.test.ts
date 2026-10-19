@@ -299,6 +299,12 @@ describe('nearest() pre-limit count (#11)', () => {
 });
 
 describe('listCountries', () => {
+  it('combines country and continent without inferring region membership from its prefix', () => {
+    expect(svc.listCountries('EU', true, 'us')).toEqual([]);
+    expect(svc.listCountries('EU', true, 'xk')).toMatchObject([
+      { code: 'XK', regions: [{ code: 'KS-U-A' }] },
+    ]);
+  });
   it('lists countries with airport counts, sorted by name', () => {
     const countries = svc.listCountries(undefined, false);
     const us = countries.find((c) => c.code === 'US');
@@ -405,6 +411,6 @@ describe('country/region enrichment', () => {
   it('resolves country and region names', () => {
     expect(svc.country('US')?.name).toBe('United States');
     expect(svc.region('US-WA')?.name).toBe('Washington');
-    expect(svc.country('ZZ')).toBeUndefined();
+    expect(svc.country('XX')).toBeUndefined();
   });
 });

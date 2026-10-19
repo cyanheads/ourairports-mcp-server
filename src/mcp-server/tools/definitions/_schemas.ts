@@ -12,6 +12,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
+import { COUNTRY_CODE_PATTERN, REGION_CODE_PATTERN } from '@/services/airport-data/facet-codes.js';
 import type {
   Airport,
   CodeResolution,
@@ -20,6 +21,39 @@ import type {
   ResolvedVia,
   Runway,
 } from '@/services/airport-data/types.js';
+
+/** Literal empty optional facets are unset; whitespace-only values remain invalid. */
+export const CountryCodeSchema = z
+  .union([
+    z.literal(''),
+    z
+      .string()
+      .trim()
+      .regex(COUNTRY_CODE_PATTERN, 'Expected country format: two letters (e.g. US).')
+      .describe('Two-letter country code.'),
+  ])
+  .optional()
+  .describe(
+    'Country code from ourairports_list_countries (e.g. US). Case-insensitive; surrounding whitespace is ignored. Literal empty string is unset; whitespace-only is invalid.',
+  );
+
+/** Accept the source region shape without assuming its country association. */
+export const RegionCodeSchema = z
+  .union([
+    z.literal(''),
+    z
+      .string()
+      .trim()
+      .regex(
+        REGION_CODE_PATTERN,
+        'Expected region format: two letters followed by one or two hyphen-separated segments of 1–3 letters/digits (e.g. US-WA, KS-U-A).',
+      )
+      .describe('Region code with one or two segments.'),
+  ])
+  .optional()
+  .describe(
+    'Region code from ourairports_list_countries with include_regions (e.g. US-WA or KS-U-A). Case-insensitive; surrounding whitespace is ignored. Literal empty string is unset; whitespace-only is invalid.',
+  );
 
 /** Nullable code set echoed on every airport record (drives "no IATA" signal). */
 export const AirportSummarySchema = z

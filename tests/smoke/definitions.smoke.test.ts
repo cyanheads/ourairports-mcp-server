@@ -27,11 +27,11 @@ describe('definition smoke coverage', () => {
   it('executes every shipped tool and resource definition', async () => {
     const searchAirports = await searchAirportsTool.handler(
       searchAirportsTool.input.parse({ query: 'seattle' }),
-      createMockContext(),
+      createMockContext({ errors: searchAirportsTool.errors }),
     );
     const searchRunways = await searchRunwaysTool.handler(
       searchRunwaysTool.input.parse({ country: 'US' }),
-      createMockContext(),
+      createMockContext({ errors: searchRunwaysTool.errors }),
     );
     const getAirport = await getAirportTool.handler(
       getAirportTool.input.parse({ code: 'KSEA' }),
@@ -47,7 +47,7 @@ describe('definition smoke coverage', () => {
     );
     const listCountries = await listCountriesTool.handler(
       listCountriesTool.input.parse({}),
-      createMockContext(),
+      createMockContext({ errors: listCountriesTool.errors }),
     );
     const airport = await airportResource.handler(
       airportResource.params!.parse({ code: 'KSEA' }),

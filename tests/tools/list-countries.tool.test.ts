@@ -4,7 +4,11 @@
  * @module tests/tools/list-countries.tool.test
  */
 
-import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createMockContext as createBaseContext,
+  getEnrichment,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
 
@@ -15,6 +19,8 @@ vi.mock('@/services/airport-data/airport-data-service.js', async (orig) => {
 });
 
 const { listCountriesTool } = await import('@/mcp-server/tools/definitions/list-countries.tool.js');
+
+const createMockContext = () => createBaseContext({ errors: listCountriesTool.errors });
 
 describe('listCountriesTool', () => {
   it('lists countries with airport counts', async () => {
@@ -48,7 +54,7 @@ describe('listCountriesTool', () => {
   it('emits a notice when the continent matches nothing', async () => {
     const ctx = createMockContext();
     const result = await listCountriesTool.handler(
-      listCountriesTool.input.parse({ continent: 'AN' }),
+      listCountriesTool.input.parse({ continent: 'AF' }),
       ctx,
     );
     expect(result.countries).toHaveLength(0);

@@ -7,8 +7,8 @@
  * runways/frequencies, an ident-keyed navaid map, a flat coordinate array for
  * haversine scans, country/region maps, and a tokenized text-search index.
  *
- * Every request-time accessor is then an O(1) map lookup or a single O(n) scan
- * over coordinates — no network, no SQLite, no per-request parsing. The corpus
+ * Request-time queries use map lookups and corpus scans; airport search retains
+ * a bounded top-N heap. No network, SQLite, or per-request parsing. The corpus
  * is replaced wholesale at image-build time, so there is nothing to sync.
  * @module src/services/airport-data/airport-data-service
  */
@@ -489,7 +489,11 @@ export class AirportDataService {
     }
     const country = filters.country?.toUpperCase();
     const region = filters.region?.toUpperCase();
-    const matched: { airport: Airport; score: number }[] = [];
+    const matched: { airport: Airport; score: number; order: number }[] = [];
+    type Candidate = (typeof matched)[number];
+    const compare = (a: Candidate, b: Candidate) =>
+      b.score - a.score || a.airport.name.localeCompare(b.airport.name) || a.order - b.order;
+    let totalMatched = 0;
 
     for (const airport of this.airportsById.values()) {
       if (!filters.includeClosed && airport.type === 'closed') continue;
@@ -501,16 +505,49 @@ export class AirportDataService {
         const tokens = this.tokensByAirportId.get(airport.id);
         if (!tokens) continue;
         if (!queryTokens.every((t) => hasTokenPrefix(tokens, t))) continue;
-        matched.push({ airport, score: scoreAirport(airport, filters.query as string) });
+      }
+      const score = scoreAirport(airport, hasQuery ? filters.query : undefined);
+      const order = totalMatched++;
+      // Worst candidate at the root: reject without allocating a row once full.
+      const worst = matched[0];
+      if (matched.length === filters.limit && worst) {
+        const rank = worst.score - score || airport.name.localeCompare(worst.airport.name);
+        if (rank >= 0) continue; // Later dataset rows lose all comparator ties.
+        matched[0] = { airport, score, order };
+        let parent = 0;
+        while (parent * 2 + 1 < matched.length) {
+          let child = parent * 2 + 1;
+          if (
+            child + 1 < matched.length &&
+            compare(matched[child + 1] as Candidate, matched[child] as Candidate) > 0
+          )
+            child++;
+          if (compare(matched[parent] as Candidate, matched[child] as Candidate) >= 0) break;
+          [matched[parent], matched[child]] = [
+            matched[child] as Candidate,
+            matched[parent] as Candidate,
+          ];
+          parent = child;
+        }
       } else {
-        matched.push({ airport, score: scoreAirport(airport, undefined) });
+        matched.push({ airport, score, order });
+        let child = matched.length - 1;
+        while (child > 0) {
+          const parent = Math.floor((child - 1) / 2);
+          if (compare(matched[parent] as Candidate, matched[child] as Candidate) >= 0) break;
+          [matched[parent], matched[child]] = [
+            matched[child] as Candidate,
+            matched[parent] as Candidate,
+          ];
+          child = parent;
+        }
       }
     }
 
-    matched.sort((a, b) => b.score - a.score || a.airport.name.localeCompare(b.airport.name));
+    matched.sort(compare);
     return {
-      airports: matched.slice(0, filters.limit).map((m) => m.airport),
-      totalMatched: matched.length,
+      airports: matched.map((m) => m.airport),
+      totalMatched,
     };
   }
 
@@ -521,7 +558,7 @@ export class AirportDataService {
    * airport set first, then each surviving airport's runways are filtered by
    * surface (case-insensitive substring), min length/width, lighting, and the
    * closed-runway flag. Emits flat `{ airport, runway }` rows — one per matching
-   * runway — collected in full for the pre-limit total, then capped at `limit`.
+   * runway — keep the first `limit` rows while counting every match.
    *
    * Sparse thresholds exclude: when `minLengthFt`/`minWidthFt` is set, a runway
    * with an unknown value for that field is dropped, never assumed to pass — the
@@ -532,6 +569,7 @@ export class AirportDataService {
     const region = filters.region?.toUpperCase();
     const surface = filters.surface?.trim().toLowerCase();
     const matches: RunwayMatch[] = [];
+    let totalMatched = 0;
 
     for (const airport of this.airportsById.values()) {
       if (!filters.includeClosedAirports && airport.type === 'closed') continue;
@@ -557,11 +595,12 @@ export class AirportDataService {
           continue;
         if (surface !== undefined && !runway.surface?.trim().toLowerCase().includes(surface))
           continue;
-        matches.push({ airport, runway });
+        totalMatched++;
+        if (matches.length < filters.limit) matches.push({ airport, runway });
       }
     }
 
-    return { matches: matches.slice(0, filters.limit), totalMatched: matches.length };
+    return { matches, totalMatched };
   }
 
   /**
@@ -646,13 +685,18 @@ export class AirportDataService {
 
   /**
    * List countries present in the dataset (with airport counts), optionally
-   * filtered to a continent, optionally with their regions nested.
+   * filtered by country and continent together, optionally with their regions nested.
    */
-  listCountries(continent: string | undefined, includeRegions: boolean): CountrySummary[] {
+  listCountries(
+    continent: string | undefined,
+    includeRegions: boolean,
+    countryCode?: string,
+  ): CountrySummary[] {
     const cont = continent?.toUpperCase();
     const out: CountrySummary[] = [];
 
     for (const country of this.countriesByCode.values()) {
+      if (countryCode && country.code.toUpperCase() !== countryCode.toUpperCase()) continue;
       if (cont && country.continent?.toUpperCase() !== cont) continue;
       const summary: CountrySummary = {
         code: country.code,

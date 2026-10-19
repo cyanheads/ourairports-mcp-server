@@ -14,7 +14,7 @@ import { AIRPORT_TYPES } from '@/services/airport-data/types.js';
 import { AirportSummarySchema, renderAirportLines, toAirportSummary } from './_schemas.js';
 
 export const findAirportsTool = tool('ourairports_find_airports', {
-  title: 'ourairports-mcp-server',
+  title: 'Find Airports',
   description:
     'Find airports within a radius of a latitude/longitude, ranked nearest-first by great-circle distance, each with its distance (km) and bearing (degrees true) from the query point. The grounding tool for "nearest airport to here" — pair it with a live aviation server to fetch weather or positions for the result. Takes a coordinate only: no geocoding, so resolve place names to lat/lon upstream first (e.g. an OpenStreetMap or Open-Meteo geocode tool). Closed airports are excluded unless include_closed is set. totalCount is the in-radius match count before limit; a capped result says so. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },

@@ -119,7 +119,7 @@ describe('findNavaidsTool', () => {
     const ctx = ctxWithContract();
     expect(() =>
       findNavaidsTool.handler(findNavaidsTool.input.parse({ latitude: 47 }), ctx),
-    ).toThrow();
+    ).toThrow('latitude was supplied without longitude');
   });
 
   // #7: airport_code is trimmed before lookup; a padded code selects airport mode.

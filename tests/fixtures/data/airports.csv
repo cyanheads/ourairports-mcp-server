@@ -28,3 +28,5 @@
 30632,"ZLAK","small_airport","Ankang Fuqiang Airport",32.75696,108.87338,1209,"AS","CN","CN-61","Ankang (Hanbin)","yes","ZLAK","AKA","ZLAK",,,"https://en.wikipedia.org/wiki/Ankang_Fuqiang_Airport",
 38737,"AR-0062","small_airport","Escobar Aeroclub",-34.2986,-58.7989,13,"SA","AR","AR-B","Belén de Escobar","no",,,,"LEN",,,
 4018,"LELN","medium_airport","León Airport",42.590709,-5.653406,3006,"EU","ES","ES-CL","La Virgen del Camino","yes","LELN","LEN","LELN",,"https://www.aena.es/en/leon.html","https://en.wikipedia.org/wiki/Le%C3%B3n_Airport",
+990001,"TIE-A","closed","Tied Selection Airport",-80,80,0,"EU","FR","FR-U-A",,"no",,,,,,,
+990002,"TIE-B","closed","Tied Selection Airport",-80,80,0,"EU","FR","FR-U-A",,"no",,,,,,,

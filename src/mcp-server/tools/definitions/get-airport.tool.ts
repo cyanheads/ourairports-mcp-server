@@ -27,7 +27,7 @@ import {
 } from './_schemas.js';
 
 export const getAirportTool = tool('ourairports_get_airport', {
-  title: 'ourairports-mcp-server',
+  title: 'Get Airport',
   description:
     "Fetch the full record for one airport resolved by ANY code — IATA (SEA), ICAO (KSEA), GPS, national/local, or the OurAirports ident — with its runways and radio frequencies inline. The single `code` param is resolved case-insensitively across all five identifier spaces (priority: ident, then ICAO, IATA, GPS, local). The response always echoes the airport's complete code set and a resolutionNote naming which space matched; when other airports carry the same code, the note names each one (ident, country, code space) and why this airport won, so a wrong resolution is self-correcting — pass the other airport's ident to fetch it. Absent codes are reported as null, never an error. Runway lengths are the full runway surface (displaced thresholds and overruns included), not usable takeoff or landing distance. Closed airports always resolve. OurAirports is community-edited — not authoritative for flight operations.",
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },

@@ -7,16 +7,39 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
 import { AIRPORT_TYPES } from '@/services/airport-data/types.js';
-import { AirportSummarySchema, renderAirportLines, toAirportSummary } from './_schemas.js';
+import {
+  AirportSummarySchema,
+  CountryCodeSchema,
+  RegionCodeSchema,
+  renderAirportLines,
+  toAirportSummary,
+} from './_schemas.js';
 
 export const searchAirportsTool = tool('ourairports_search_airports', {
-  title: 'ourairports-mcp-server',
+  title: 'Search Airports',
   description:
     'Search the bundled OurAirports corpus by free-text (name / municipality / keywords) and/or facets (country, region, type). Every query token must match (word order and partial words are handled). Returns ranked airport summaries — operational and larger airports first — each with its full code set and coordinates, ready to chain into ourairports_get_airport. Closed airports are excluded unless include_closed is set. Use ourairports_list_countries for valid country/region codes. For "nearest airport to a coordinate" use ourairports_find_airports instead. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+
+  errors: [
+    {
+      reason: 'unknown_country',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'The country code is absent from the bundled country table.',
+      recovery: 'Call ourairports_list_countries to discover valid country codes, then retry.',
+    },
+    {
+      reason: 'unknown_region',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'The region code is absent from the bundled region table.',
+      recovery:
+        'Call ourairports_list_countries with include_regions and optionally country to discover valid region codes, then retry.',
+    },
+  ],
 
   input: z.object({
     query: z
@@ -25,22 +48,8 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
       .describe(
         'Free-text search over airport name, municipality, and keywords. Tokens are AND-matched. Omit to browse purely by facets.',
       ),
-    country: z
-      .string()
-      .trim()
-      .min(1)
-      .optional()
-      .describe(
-        'ISO 3166-1 alpha-2 country code filter (e.g. US). Exact match, case-insensitive; surrounding whitespace is ignored. Discover codes with ourairports_list_countries.',
-      ),
-    region: z
-      .string()
-      .trim()
-      .min(1)
-      .optional()
-      .describe(
-        'ISO 3166-2 region code filter (e.g. US-WA). Exact match, case-insensitive; surrounding whitespace is ignored.',
-      ),
+    country: CountryCodeSchema,
+    region: RegionCodeSchema,
     type: z
       .enum(AIRPORT_TYPES)
       .optional()
@@ -92,6 +101,10 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
 
   handler(input, ctx) {
     const svc = getAirportDataService();
+    if (input.country && !svc.country(input.country))
+      throw ctx.fail('unknown_country', `Unknown country code "${input.country}".`);
+    if (input.region && !svc.region(input.region))
+      throw ctx.fail('unknown_region', `Unknown region code "${input.region}".`);
     const limit = input.limit ?? getServerConfig().defaultSearchLimit;
     const result = svc.search({
       ...(input.query && { query: input.query }),

@@ -25,7 +25,7 @@ import {
 } from './_schemas.js';
 
 export const findNavaidsTool = tool('ourairports_find_navaids', {
-  title: 'ourairports-mcp-server',
+  title: 'Find Navaids',
   description:
     'Find navigation aids (VOR, VOR-DME, DME, NDB, NDB-DME, TACAN, VORTAC) two ways: spatially, by passing latitude+longitude (with an optional radius_km); or relationally, by passing airport_code to get the navaids that serve that airport. Supply exactly one mode — both or neither is a validation error. Coordinate mode ranks nearest-first with distance (km) and bearing (degrees true). frequencyKhz is the stored value for every navaid type (a VOR on 114.5 MHz reads 114500); frequencyMhz carries the VHF frequency of a VOR or VOR-DME and the paired VHF frequency of a DME, TACAN, or VORTAC, and is null for NDB and NDB-DME, which are tuned in kHz. Each navaid also carries its DME paired frequency, usage class, power, and actual and slaved magnetic variation. totalCount is the match count before limit; a capped result says so. Airport mode returns an empty list (not an error) when the airport exists but has no associated navaids; an unknown airport_code is an error. When airport_code is also a code of other airports, a resolutionNote says which airport it resolved to and names the others by ident — pass that ident to query one of them. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -34,7 +34,7 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
     {
       reason: 'mode_conflict',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'Both coordinate (latitude/longitude) and airport_code were supplied, or neither was.',
+      when: 'Coordinates are incomplete, both coordinate and airport modes were supplied, or neither mode was supplied.',
       recovery:
         'Supply exactly one mode: either latitude and longitude (coordinate search) or airport_code (navaids serving an airport).',
     },
@@ -174,8 +174,21 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
     const hasAirport = input.airport_code !== undefined;
 
     // Exactly one mode. A lone latitude or longitude is also a conflict.
-    if (hasAirport === hasCoord || (hasPartialCoord && !hasCoord)) {
-      throw ctx.fail('mode_conflict');
+    if (hasPartialCoord && !hasCoord) {
+      const supplied = input.latitude !== undefined ? 'latitude' : 'longitude';
+      const missing = input.latitude !== undefined ? 'longitude' : 'latitude';
+      throw ctx.fail(
+        'mode_conflict',
+        `${supplied} was supplied without ${missing}.${hasAirport ? ' airport_code cannot be combined with coordinates.' : ''}`,
+      );
+    }
+    if (hasAirport === hasCoord) {
+      throw ctx.fail(
+        'mode_conflict',
+        hasAirport
+          ? 'Both latitude/longitude and airport_code were supplied.'
+          : 'Neither latitude/longitude nor airport_code was supplied.',
+      );
     }
 
     if (hasCoord) {

@@ -4,8 +4,9 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { toolContractSuite } from '@cyanheads/mcp-ts-core/testing/vitest';
-import { expect, vi } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
 
 const svc = await loadFixtureService();
@@ -15,6 +16,55 @@ vi.mock('@/services/airport-data/airport-data-service.js', async (orig) => {
 });
 
 const { findNavaidsTool } = await import('@/mcp-server/tools/definitions/find-navaids.tool.js');
+
+it.each([
+  [{ latitude: 47 }, 'longitude'],
+  [{ longitude: 0 }, 'latitude'],
+  [{ latitude: 0, airport_code: 'KSEA' }, 'longitude'],
+  [{ longitude: -122, airport_code: 'KSEA' }, 'latitude'],
+])('names the missing counterpart for %j on both error surfaces', async (input, missing) => {
+  const result = await runToolContract(findNavaidsTool, input);
+  expect(result.isError).toBe(true);
+  expect(result.structuredContent).toMatchObject({
+    error: {
+      code: JsonRpcErrorCode.ValidationError,
+      message: expect.stringContaining(`without ${missing}`),
+      data: { reason: 'mode_conflict', recovery: { hint: findNavaidsTool.errors![0]!.recovery } },
+    },
+  });
+  expect(JSON.stringify(result.content)).toContain(`without ${missing}`);
+  if ('airport_code' in input)
+    expect(JSON.stringify(result.content)).toContain('airport_code cannot be combined');
+});
+
+it.each([
+  [{}, 'Neither latitude/longitude nor airport_code was supplied.'],
+  [
+    { latitude: 0, longitude: 0, airport_code: 'KSEA' },
+    'Both latitude/longitude and airport_code were supplied.',
+  ],
+])('accurately describes the complete-mode conflict for %j', async (input, message) => {
+  const result = await runToolContract(findNavaidsTool, input);
+  expect(result.structuredContent).toMatchObject({
+    error: { code: JsonRpcErrorCode.ValidationError, message, data: { reason: 'mode_conflict' } },
+  });
+  expect(JSON.stringify(result.content)).toContain(message);
+});
+
+it.each([{ latitude: 0, longitude: 0 }, { airport_code: ' ksea ' }])(
+  'preserves valid input mode %j',
+  async (input) => {
+    const result = await runToolContract(findNavaidsTool, input);
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toHaveProperty(
+      'mode',
+      'airport_code' in input ? 'airport' : 'coordinate',
+    );
+    expect(JSON.stringify(result.content)).toContain(
+      'airport_code' in input ? 'airport' : 'coordinate',
+    );
+  },
+);
 
 toolContractSuite(findNavaidsTool, {
   // `expected` is typed to the domain output, so enrichment fields and partial

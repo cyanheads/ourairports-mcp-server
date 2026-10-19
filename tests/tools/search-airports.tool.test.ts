@@ -5,7 +5,11 @@
  * @module tests/tools/search-airports.tool.test
  */
 
-import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createMockContext as createBaseContext,
+  getEnrichment,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
 
@@ -18,6 +22,8 @@ vi.mock('@/services/airport-data/airport-data-service.js', async (orig) => {
 const { searchAirportsTool } = await import(
   '@/mcp-server/tools/definitions/search-airports.tool.js'
 );
+
+const createMockContext = () => createBaseContext({ errors: searchAirportsTool.errors });
 
 describe('searchAirportsTool', () => {
   it('matches by name and ranks the major airport first', async () => {

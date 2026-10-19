@@ -8,11 +8,14 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
 import { AIRPORT_TYPES } from '@/services/airport-data/types.js';
 import {
   AirportSummarySchema,
+  CountryCodeSchema,
+  RegionCodeSchema,
   RunwaySchema,
   renderAirportLines,
   renderRunwayEnds,
@@ -23,28 +26,30 @@ import {
 } from './_schemas.js';
 
 export const searchRunwaysTool = tool('ourairports_search_runways', {
-  title: 'ourairports-mcp-server',
+  title: 'Search Runways',
   description:
     'Search runways across the whole bundled OurAirports corpus by attribute, joined back to their airports — the cross-airport counterpart to ourairports_get_airport (which returns runways for one already-known airport). Filter by airport facets (country, region, type) and runway facets (surface, min_length_ft, min_width_ft, lighted). Returns one flat {airport, runway} row per matching runway, so an airport with three matching runways contributes three rows. `surface` is a case-insensitive substring match against the raw upstream surface string, not an exact code — the runway surface must CONTAIN your text, so a shorter fragment matches more variants (no controlled vocabulary: "asp" matches ASP, ASPH, and Asphalt). Lengths are the full runway surface, including displaced thresholds and overruns — not usable takeoff or landing distance; each runway also reports its displaced threshold per end. A runway whose length or width is unknown is excluded when the matching min_*_ft filter is set — the data can never confirm it meets the threshold. Closed airports and closed runways are both excluded unless their include_* flag is set. Use ourairports_list_countries for valid country/region codes. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
+  errors: [
+    {
+      reason: 'unknown_country',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'The country code is absent from the bundled country table.',
+      recovery: 'Call ourairports_list_countries to discover valid country codes, then retry.',
+    },
+    {
+      reason: 'unknown_region',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'The region code is absent from the bundled region table.',
+      recovery:
+        'Call ourairports_list_countries with include_regions and optionally country to discover valid region codes, then retry.',
+    },
+  ],
+
   input: z.object({
-    country: z
-      .string()
-      .trim()
-      .min(1)
-      .optional()
-      .describe(
-        'ISO 3166-1 alpha-2 country code filter (e.g. US). Exact match, case-insensitive; surrounding whitespace is ignored. Discover codes with ourairports_list_countries.',
-      ),
-    region: z
-      .string()
-      .trim()
-      .min(1)
-      .optional()
-      .describe(
-        'ISO 3166-2 region code filter (e.g. US-WA). Exact match, case-insensitive; surrounding whitespace is ignored.',
-      ),
+    country: CountryCodeSchema,
+    region: RegionCodeSchema,
     type: z
       .enum(AIRPORT_TYPES)
       .optional()
@@ -139,6 +144,10 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
 
   handler(input, ctx) {
     const svc = getAirportDataService();
+    if (input.country && !svc.country(input.country))
+      throw ctx.fail('unknown_country', `Unknown country code "${input.country}".`);
+    if (input.region && !svc.region(input.region))
+      throw ctx.fail('unknown_region', `Unknown region code "${input.region}".`);
     const limit = input.limit ?? getServerConfig().defaultSearchLimit;
     const result = svc.searchRunways({
       ...(input.country && { country: input.country }),

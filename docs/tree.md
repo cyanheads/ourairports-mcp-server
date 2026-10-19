@@ -1,6 +1,6 @@
 # ourairports-mcp-server - Directory Structure
 
-Generated on: 2026-10-09 06:30:48
+Generated on: 2026-10-19 01:25:45
 
 ```text
 ourairports-mcp-server/
@@ -163,6 +163,7 @@ ourairports-mcp-server/
 │   │       ├── airport-data-service.ts
 │   │       ├── csv.ts
 │   │       ├── data-dir.ts
+│   │       ├── facet-codes.ts
 │   │       ├── geo.ts
 │   │       └── types.ts
 │   └── index.ts
@@ -179,15 +180,21 @@ ourairports-mcp-server/
 │   │   │   └── runways.csv
 │   │   └── load.ts
 │   ├── fuzz/
+│   │   ├── airport-facets.fuzz.test.ts
 │   │   └── find-navaids-tool.fuzz.test.ts
 │   ├── integration/
+│   │   ├── airport-facets-contract.int.test.ts
+│   │   ├── catalogue.int.test.ts
 │   │   └── find-navaids-contract.int.test.ts
 │   ├── prompts/
 │   ├── resources/
 │   │   └── airport.resource.test.ts
 │   ├── services/
 │   │   ├── airport-data-service.test.ts
-│   │   └── data-dir.test.ts
+│   │   ├── bounded-search.test.ts
+│   │   ├── build-data.test.ts
+│   │   ├── data-dir.test.ts
+│   │   └── facet-codes.test.ts
 │   ├── smoke/
 │   │   └── definitions.smoke.test.ts
 │   └── tools/

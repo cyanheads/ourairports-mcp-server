@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -33,7 +33,7 @@
 
 ## Overview
 
-Offline aviation reference data from the public-domain [OurAirports](https://ourairports.com/) dataset — airports, runways, navaids, and radio frequencies, bundled with the package rather than fetched at runtime. Resolve an airport by any code, search by name or facets, ground a coordinate in the nearest airports or navaids, and look up the countries and regions in the dataset. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Airports, runways, navaids, and radio frequencies worldwide from the public-domain [OurAirports](https://ourairports.com/) dataset, bundled for offline use. Resolve an airport by any code, search by name or facets, and find the airports and navaids nearest a coordinate.
 
 ### Tools
 
@@ -44,7 +44,7 @@ Offline aviation reference data from the public-domain [OurAirports](https://our
 | `ourairports_get_airport` | Full record for one airport resolved by any code (IATA/ICAO/GPS/local/ident), with its runways and radio frequencies inline. |
 | `ourairports_find_airports` | Airports within a radius of a coordinate, ranked nearest-first by great-circle distance, with distance and bearing. |
 | `ourairports_find_navaids` | Navigation aids (VOR, VOR-DME, DME, NDB, NDB-DME, TACAN, VORTAC) near a coordinate or serving a specific airport. |
-| `ourairports_list_countries` | Countries present in the dataset with ISO codes and airport counts; optional continent filter and nested regions. The lookup table for valid `country`/`region` filter values. |
+| `ourairports_list_countries` | Countries with airport counts and optional nested regions, filtered by country and/or continent. The lookup table for valid `country`/`region` filters on both search tools. |
 
 ### Resources
 
@@ -59,7 +59,7 @@ All data is also reachable via `ourairports_get_airport` — tool-only clients l
 ### `ourairports_search_airports` <sub>tool</sub>
 
 - Free-text search over name, municipality, and keywords; tokens are AND-matched (word order and partial words handled)
-- Faceted filters: `country` (ISO 3166-1 alpha-2), `region` (ISO 3166-2), and `type` — `country`/`region` are exact match, case-insensitive, with surrounding whitespace ignored
+- Faceted filters: `country` (two letters), `region` (two letters followed by one or two hyphen-separated segments of 1–3 letters/digits), and `type`. Codes are case-insensitive with surrounding whitespace ignored; literal `""` is unset, whitespace-only is invalid. Malformed codes fail argument validation; codes absent from the bundled tables raise `unknown_country` / `unknown_region` with discovery guidance. Valid codes with no matching airports remain empty successes
 - Closed airports excluded by default; opt in with `include_closed`
 - Results ranked operational/larger-airports-first, each with its full code set and coordinates for chaining into `ourairports_get_airport`
 - `limit` accepts 1–100 rows and defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT` (20); truncation reports the total matched count, cap, and recovery guidance
@@ -69,6 +69,7 @@ All data is also reachable via `ourairports_get_airport` — tool-only clients l
 ### `ourairports_search_runways` <sub>tool</sub>
 
 - Airport facets (`country`, `region`, `type`) narrow the airports first; runway facets (`surface`, `min_length_ft`, `min_width_ft`, `lighted`) then filter their runways
+- Country/region facets follow the same shape, empty-string, normalization, and bundled-membership rules as `ourairports_search_airports`; valid empty selections remain successful
 - `surface` is a case-insensitive substring match against the raw upstream surface string (no controlled vocabulary — a shorter fragment like `asp` matches ASP, ASPH, and Asphalt), not an exact code
 - Returns one flat `{ airport, runway }` row per matching runway — an airport with three matching runways contributes three rows
 - `lengthFt` and `min_length_ft` are the full runway surface as OurAirports records it, including displaced thresholds and overruns — not usable takeoff or landing distance; each runway also carries `leDisplacedThresholdFt` / `heDisplacedThresholdFt` (`null` when none is recorded)
@@ -103,7 +104,7 @@ All data is also reachable via `ourairports_get_airport` — tool-only clients l
 
 - **Coordinate mode:** `latitude` + `longitude` (+ optional `radius_km`, 1–500, default 100) ranks navaids nearest-first with distance and bearing; `limit` (1–50) defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT`, clamped to 50
 - **Airport mode:** `airport_code` returns the navaids serving that airport
-- Exactly one mode required — supplying both or neither is a `mode_conflict` validation error
+- Exactly one complete mode required — both modes, neither mode, or incomplete coordinates raise `mode_conflict`; incomplete-coordinate messages name the missing counterpart
 - `frequencyKhz` is the stored value for every type (a VOR on 114.5 MHz reads 114500); `frequencyMhz` carries the VHF frequency of a VOR or VOR-DME and the paired VHF frequency of a DME, TACAN, or VORTAC, and is `null` for NDB and NDB-DME, which tune in kHz; an upstream `-1` placeholder reads as `null`
 - Each navaid carries its service-volume metadata as recorded upstream: `usageType` (HI, LO, BOTH, TERMINAL, RNAV), `power`, `magneticVariationDeg` (actual, positive east), `slavedVariationDeg` (the variation built into the radials), and `dmeFrequencyKhz` (the DME's paired VHF frequency) — `null` where the dataset has no value
 - `totalCount` is the match count before `limit` in both modes; truncation reports the cap and recovery guidance
@@ -114,10 +115,12 @@ All data is also reachable via `ourairports_get_airport` — tool-only clients l
 
 ### `ourairports_list_countries` <sub>tool</sub>
 
-- Optional `continent` filter (AF, AN, AS, EU, NA, OC, SA); optional `include_regions` nests each country's ISO 3166-2 regions with their airport counts
+- Optional `country` and `continent` (AF, AN, AS, EU, NA, OC, SA) filters combine as AND; optional `include_regions` nests regions by their recorded country association (so `KS-U-A` belongs to `XK`)
+- Use `{ "country": "US", "include_regions": true }` for one country's regions. Unscoped `include_regions` returns the entire region table; unscoped and continent-only requests remain accepted
+- `country` uses the search tools' shape, normalization, and membership rules; `""` is unset, whitespace-only is invalid, and an absent code raises `unknown_country`
 - Airport counts exclude closed airports
-- Countries sorted by name; the lookup table for valid `country` / `region` filter values used by `ourairports_search_airports`
-- Empty continent match returns a notice suggesting a call without the filter
+- Countries sorted by name; the lookup table for valid `country` / `region` filters used by `ourairports_search_airports` and `ourairports_search_runways`
+- A country/continent mismatch returns an empty success with a notice naming both filters; `totalCount` counts returned countries
 
 ---
 
@@ -137,6 +140,7 @@ OurAirports-specific:
 - In-memory indices built once at startup: id maps, a priority-ordered unified code index, airport-ref joins for runways and frequencies, an ident-keyed navaid join, a flat `Float64Array` of coordinates, country/region maps, and a tokenized text-search index
 - Brute-force haversine nearest-neighbour over the coordinate array — a few milliseconds across 85k airports, no spatial-index dependency
 - CSVs parsed by header name, not column position, so an upstream column reorder can't silently misalign fields
+- Airport search retains at most `limit` ranked candidates; runway search retains its first `limit` rows while both count every match
 
 Agent-friendly output:
 
@@ -260,7 +264,7 @@ bun run build:data
 
 ### Refreshing the data
 
-The bundled snapshot is as fresh as the last `build:data` run (or, for the Docker image, the last build). To pull the latest daily drop from the OurAirports mirror, re-run `bun run build:data` and rebuild. To point at an existing local data drop without rebuilding, set `OURAIRPORTS_DATA_DIR`.
+The bundled snapshot is as fresh as the last `build:data` run (or, for the Docker image, the last build). To pull the latest daily drop from the OurAirports mirror, re-run `bun run build:data` and rebuild. The build validates country/region code shapes and airport references against the lookup tables before writing the fetched bundle; `bun run build:data --check` validates an existing bundle. To point at an existing local data drop without rebuilding, set `OURAIRPORTS_DATA_DIR`.
 
 ## Configuration
 
