@@ -1,6 +1,6 @@
 # ourairports-mcp-server - Directory Structure
 
-Generated on: 2026-10-19 01:25:45
+Generated on: 2026-11-11 05:51:14
 
 ```text
 ourairports-mcp-server/
@@ -26,6 +26,7 @@ ourairports-mcp-server/
 ├── changelog/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
+│   ├── 0.3.x/
 │   └── template.md
 ├── docs/
 │   └── design.md
@@ -41,6 +42,8 @@ ourairports-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -140,6 +143,9 @@ ourairports-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── ourairports-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -149,15 +155,16 @@ ourairports-mcp-server/
 │   │   │       ├── airport.resource.ts
 │   │   │       └── index.ts
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── _schemas.ts
-│   │           ├── find-airports.tool.ts
-│   │           ├── find-navaids.tool.ts
-│   │           ├── get-airport.tool.ts
-│   │           ├── index.ts
-│   │           ├── list-countries.tool.ts
-│   │           ├── search-airports.tool.ts
-│   │           └── search-runways.tool.ts
+│   │       ├── definitions/
+│   │       │   ├── _schemas.ts
+│   │       │   ├── find-airports.tool.ts
+│   │       │   ├── find-navaids.tool.ts
+│   │       │   ├── get-airport.tool.ts
+│   │       │   ├── index.ts
+│   │       │   ├── list-countries.tool.ts
+│   │       │   ├── search-airports.tool.ts
+│   │       │   └── search-runways.tool.ts
+│   │       └── page-limit.ts
 │   ├── services/
 │   │   └── airport-data/
 │   │       ├── airport-data-service.ts
@@ -165,6 +172,7 @@ ourairports-mcp-server/
 │   │       ├── data-dir.ts
 │   │       ├── facet-codes.ts
 │   │       ├── geo.ts
+│   │       ├── ranked-page.ts
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
@@ -203,6 +211,8 @@ ourairports-mcp-server/
 │       ├── get-airport.tool.test.ts
 │       ├── list-countries.tool.test.ts
 │       ├── markdown-escape.test.ts
+│       ├── navaid-runway-paging.test.ts
+│       ├── page-limit.test.ts
 │       ├── search-airports.tool.test.ts
 │       └── search-runways.tool.test.ts
 ├── .dockerignore
@@ -220,7 +230,9 @@ ourairports-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

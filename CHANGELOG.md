@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-11-10
+
+Page through search results, look up airports by code and navaids by ident, and find runways near a coordinate.
+
 ## [0.2.6](changelog/0.2.x/0.2.6.md) — 2026-10-18
 
 Airport filters and bounded search

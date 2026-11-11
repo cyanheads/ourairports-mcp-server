@@ -6,7 +6,7 @@
     "url": "https://github.com/cyanheads/ourairports-mcp-server",
     "source": "github"
   },
-  "version": "0.2.6",
+  "version": "0.3.0",
   "remotes": [
     {
       "type": "streamable-http",
@@ -19,7 +19,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/ourairports-mcp-server",
       "runtimeHint": "npx",
-      "version": "0.2.6",
+      "version": "0.3.0",
       "environmentVariables": [
         {
           "name": "OURAIRPORTS_CLAMP_LIMITS",
@@ -45,7 +45,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/ourairports-mcp-server",
       "runtimeHint": "npx",
-      "version": "0.2.6",
+      "version": "0.3.0",
       "environmentVariables": [
         {
           "name": "OURAIRPORTS_CLAMP_LIMITS",
