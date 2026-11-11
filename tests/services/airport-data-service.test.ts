@@ -8,7 +8,7 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { AirportDataService } from '@/services/airport-data/airport-data-service.js';
-import { nearest } from '@/services/airport-data/geo.js';
+import { haversineKm, nearest } from '@/services/airport-data/geo.js';
 import { loadFixtureService } from '../fixtures/load.js';
 
 let svc: AirportDataService;
@@ -234,7 +234,7 @@ describe('navaids', () => {
   });
 
   it('does not index standalone navaids (empty associated_airport) under any airport', () => {
-    // NDLS is enroute with no associated_airport — only reachable via coordinate mode.
+    // NDLS is enroute with no associated_airport.
     const coord = svc.nearbyNavaids(40.0, -160.0, 50, 20, undefined);
     expect(coord.navaids.some((h) => h.navaid.ident === 'NDLS')).toBe(true);
   });
@@ -249,6 +249,25 @@ describe('navaids', () => {
     expect(airport.navaids.map((n) => n.ident)).toEqual(['JFK']);
     expect(airport.totalMatched).toBe(2);
     expect(svc.navaidsForAirport('KJFK', 'VOR-DME', 1).totalMatched).toBe(1);
+  });
+
+  it('looks up all holders of an exact navaid ident in dataset order and pages after type filtering', () => {
+    const first = svc.navaidsByIdent(' bik ', undefined, 1);
+    const second = svc.navaidsByIdent('BIK', undefined, 1, 1);
+    expect(first.navaids.map((n) => n.id)).toEqual([86052]);
+    expect(second.navaids.map((n) => n.id)).toEqual([86054]);
+    expect(first.totalMatched).toBe(2);
+    expect(second.totalMatched).toBe(2);
+    expect(svc.navaidsByIdent('BIK', 'NDB', 1)).toMatchObject({
+      navaids: [{ id: 86054 }],
+      totalMatched: 1,
+    });
+    expect(svc.navaidsByIdent('BIK', 'NDB', 1, 1)).toEqual({ navaids: [], totalMatched: 1 });
+    expect(svc.navaidsByIdent('BI', undefined, 1)).toEqual({ navaids: [], totalMatched: 0 });
+    expect(svc.navaidsForAirport('KJFK', undefined, 1, 1)).toMatchObject({
+      navaids: [{ ident: 'CRI' }],
+      totalMatched: 2,
+    });
   });
 
   it('parses slaved_variation_deg and keeps a stored 0 (#18)', () => {
@@ -276,6 +295,18 @@ describe('navaids', () => {
 describe('nearest() pre-limit count (#11)', () => {
   // Three points on the equator at 0°, 1°, and 2° east (~111 km apart) plus one far away.
   const coords = new Float64Array([0, 2, 0, 0, 0, 1, 50, 50]);
+
+  it('keeps coordinate order for equal distances', () => {
+    const tied = new Float64Array([0, 1, 0, -1, 0, 0, 1, 0]);
+    const { hits, total } = nearest(tied, 0, 0, 300, 3, () => true);
+    expect(hits.map((h) => h.index)).toEqual([2, 0, 1]);
+    expect(total).toBe(4);
+  });
+
+  it('keeps great-circle distance finite at antipodes', () => {
+    const lat = 88.40000000000009;
+    expect(haversineKm(-lat, 0, lat, 180)).toBeCloseTo(20015.1144, 3);
+  });
 
   it('returns the nearest `limit` hits and the in-radius count before the slice', () => {
     const { hits, total } = nearest(coords, 0, 0, 300, 2, () => true);
@@ -334,6 +365,28 @@ describe('listCountries', () => {
 });
 
 describe('search', () => {
+  it.each([
+    [' jfk ', 'KJFK'],
+    ['lgtl', 'GR-0109'],
+    ['sbom', 'BR-2199'],
+    ['mt0644', 'BR-2199'],
+    ['ar-0572', 'AR-0572'],
+    ['jfk kennedy', 'KJFK'],
+    ['seattle tacoma intl', 'KSEA'],
+    ['asheboro rgnl', 'KHBI'],
+  ])('leads search for %s with %s', (query, ident) => {
+    const res = svc.search({ query, includeClosed: false, limit: 20 });
+    expect(res.airports[0]?.ident).toBe(ident);
+  });
+
+  it('finds every exact shared-code holder without treating code prefixes as codes', () => {
+    const search = (query: string) => svc.search({ query, includeClosed: false, limit: 20 });
+    expect(search('HBE').airports.map((a) => a.ident)).toEqual(['SAHBE', 'USHBE']);
+    expect(search('SBOM').airports.map((a) => a.ident)).toEqual(['BR-2199']);
+    expect(search('SBO').totalMatched).toBe(0);
+    expect(search('ar-057').totalMatched).toBe(0);
+    expect(search('jfk seattle').totalMatched).toBe(0);
+  });
   it('matches by name token (AND) and ranks larger/operational first', () => {
     const res = svc.search({ query: 'seattle', includeClosed: false, limit: 20 });
     expect(res.totalMatched).toBeGreaterThanOrEqual(1);

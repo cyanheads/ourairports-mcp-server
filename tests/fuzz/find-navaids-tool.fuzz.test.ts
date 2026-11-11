@@ -1,5 +1,5 @@
 /**
- * @fileoverview Property-based SDK v2 safety coverage for both navaid input modes.
+ * @fileoverview Property-based SDK v2 safety coverage for all navaid input modes.
  * @module tests/fuzz/find-navaids-tool.fuzz.test
  */
 
@@ -15,7 +15,7 @@ vi.mock('@/services/airport-data/airport-data-service.js', async (orig) => {
 
 const { findNavaidsTool } = await import('@/mcp-server/tools/definitions/find-navaids.tool.js');
 
-it('keeps both navaid modes safe across generated and adversarial inputs', async () => {
+it('keeps all navaid modes safe across generated and adversarial inputs', async () => {
   const report = await fuzzTool(findNavaidsTool, {
     numRuns: 50,
     numAdversarial: 30,

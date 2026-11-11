@@ -278,6 +278,7 @@ describe('searchRunwaysTool content and displaced thresholds', () => {
     expect(text).toContain(
       '  **Runway 16L/34R** (id 244323) — length 11901 ft × width 150 ft | surface: CON | lighted: yes | closed: no\n  headings (true): 16L 180° / 34R 360°',
     );
+    expect(text).toContain('**Distance:** — km at bearing —°');
   });
 
   it('renders airport coordinates as the exact structuredContent numbers', async () => {

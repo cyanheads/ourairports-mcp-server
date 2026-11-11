@@ -1,5 +1,5 @@
 /**
- * @fileoverview SDK v2 contract coverage for the two-mode navaid tool.
+ * @fileoverview SDK v2 contract coverage for the three-mode navaid tool.
  * @module tests/integration/find-navaids-contract.int.test
  */
 
@@ -38,7 +38,7 @@ it.each([
 });
 
 it.each([
-  [{}, 'Neither latitude/longitude nor airport_code was supplied.'],
+  [{}, 'Supply latitude/longitude, airport_code, or ident.'],
   [
     { latitude: 0, longitude: 0, airport_code: 'KSEA' },
     'Both latitude/longitude and airport_code were supplied.',

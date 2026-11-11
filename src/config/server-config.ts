@@ -3,8 +3,7 @@
  * Lazy-parsed from environment variables. Framework config (transport, logging,
  * storage, etc.) is handled by @cyanheads/mcp-ts-core.
  *
- * This server wraps no live API — the only knobs are the bundled-data directory
- * and the default result cap for the search/find tools.
+ * Controls the bundled-data directory and search/find paging policy.
  * @module src/config/server-config
  */
 
@@ -25,6 +24,12 @@ const ServerConfigSchema = z.object({
     .max(100)
     .default(20)
     .describe('Default result cap for search/find tools when the caller omits `limit`.'),
+  clampLimits: z
+    .stringbool()
+    .default(true)
+    .describe(
+      'Clamp explicit limits above a tool ceiling. False restores strict limit validation.',
+    ),
 });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
@@ -36,6 +41,7 @@ export function getServerConfig(): ServerConfig {
     _config = parseEnvConfig(ServerConfigSchema, {
       dataDir: 'OURAIRPORTS_DATA_DIR',
       defaultSearchLimit: 'OURAIRPORTS_DEFAULT_SEARCH_LIMIT',
+      clampLimits: 'OURAIRPORTS_CLAMP_LIMITS',
     });
   }
   return _config;

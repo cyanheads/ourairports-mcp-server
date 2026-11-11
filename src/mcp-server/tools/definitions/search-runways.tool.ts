@@ -9,15 +9,18 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { getServerConfig } from '@/config/server-config.js';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
+import { MAX_RADIUS_KM } from '@/services/airport-data/geo.js';
 import { AIRPORT_TYPES } from '@/services/airport-data/types.js';
+import { pageLimit } from '../page-limit.js';
 import {
   AirportSummarySchema,
   CountryCodeSchema,
+  numOrDash,
   RegionCodeSchema,
   RunwaySchema,
   renderAirportLines,
+  renderNotice,
   renderRunwayEnds,
   renderRunwayName,
   renderRunwaySpec,
@@ -25,13 +28,22 @@ import {
   toRunway,
 } from './_schemas.js';
 
+const runwayPageLimit = pageLimit(100);
+const surfaceFragment = z.string().trim().min(1);
+
 export const searchRunwaysTool = tool('ourairports_search_runways', {
   title: 'Search Runways',
   description:
-    'Search runways across the whole bundled OurAirports corpus by attribute, joined back to their airports — the cross-airport counterpart to ourairports_get_airport (which returns runways for one already-known airport). Filter by airport facets (country, region, type) and runway facets (surface, min_length_ft, min_width_ft, lighted). Returns one flat {airport, runway} row per matching runway, so an airport with three matching runways contributes three rows. `surface` is a case-insensitive substring match against the raw upstream surface string, not an exact code — the runway surface must CONTAIN your text, so a shorter fragment matches more variants (no controlled vocabulary: "asp" matches ASP, ASPH, and Asphalt). Lengths are the full runway surface, including displaced thresholds and overruns — not usable takeoff or landing distance; each runway also reports its displaced threshold per end. A runway whose length or width is unknown is excluded when the matching min_*_ft filter is set — the data can never confirm it meets the threshold. Closed airports and closed runways are both excluded unless their include_* flag is set. Use ourairports_list_countries for valid country/region codes. OurAirports is community-edited — not authoritative for flight operations.',
+    'Search the bundled OurAirports corpus by airport and runway attributes. Returns one row per matching runway, paired with its airport. Supply latitude and longitude together to filter by radius and rank by distance to each parent airport. Surface matches any supplied fragment as a case-insensitive substring of the recorded surface. Lengths describe the full runway surface, including displaced thresholds and overruns. Minimum length and width filters exclude runways missing the corresponding measurement. Closed airports and runways are excluded unless their respective flags are set. Use nextOffset to continue the same query and ourairports_list_countries to find valid country and region codes. OurAirports is community-edited. Consult official sources for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   errors: [
+    {
+      reason: 'incomplete_coordinates',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'Only one coordinate is supplied, or a radius is supplied without both coordinates.',
+      recovery: 'Supply both latitude and longitude, or omit both coordinates and radius_km.',
+    },
     {
       reason: 'unknown_country',
       code: JsonRpcErrorCode.NotFound,
@@ -50,6 +62,26 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
   input: z.object({
     country: CountryCodeSchema,
     region: RegionCodeSchema,
+    latitude: z
+      .number()
+      .min(-90)
+      .max(90)
+      .optional()
+      .describe('Query point latitude in decimal degrees (WGS84). Supply with longitude.'),
+    longitude: z
+      .number()
+      .min(-180)
+      .max(180)
+      .optional()
+      .describe('Query point longitude in decimal degrees (WGS84). Supply with latitude.'),
+    radius_km: z
+      .number()
+      .min(1)
+      .max(MAX_RADIUS_KM)
+      .optional()
+      .describe(
+        'Search radius in kilometers (1–20,016). Defaults to 100 when coordinates are supplied.',
+      ),
     type: z
       .enum(AIRPORT_TYPES)
       .optional()
@@ -71,12 +103,13 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
         'Minimum runway width in feet (inclusive). Runways with an unknown width are excluded when this is set, never assumed to pass.',
       ),
     surface: z
-      .string()
-      .trim()
-      .min(1)
+      .union([
+        surfaceFragment.describe('One surface fragment.'),
+        z.array(surfaceFragment).min(1).describe('Surface fragments combined with OR.'),
+      ])
       .optional()
       .describe(
-        'Surface filter — case-insensitive substring match against the raw upstream surface string (free text, no controlled vocabulary; ~654 distinct values). Match the literal text as recorded: "asp" matches ASP/ASPH/Asphalt/ASPH-G, "con" matches CON/Concrete, "turf" or "grs" for grass strips. A shorter fragment matches more variants; there is no enum or reference tool for surfaces.',
+        'One fragment or a non-empty array of fragments. A runway qualifies when any fragment matches a case-insensitive substring of its recorded surface. For example, ["asp", "con", "pem"] matches records such as ASP, ASPH, CON, or PEM.',
       ),
     lighted: z
       .boolean()
@@ -92,15 +125,13 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       .boolean()
       .default(false)
       .describe('Include runways flagged closed. Off by default.'),
-    limit: z
+    limit: runwayPageLimit.schema,
+    offset: z
       .number()
       .int()
-      .min(1)
-      .max(100)
-      .optional()
-      .describe(
-        'Maximum runway rows to return (1–100). Defaults to OURAIRPORTS_DEFAULT_SEARCH_LIMIT (20).',
-      ),
+      .min(0)
+      .default(0)
+      .describe('Matching runway rows to skip. Defaults to 0. Use nextOffset to continue.'),
   }),
 
   output: z.object({
@@ -114,6 +145,18 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
             runway: RunwaySchema.describe(
               'The matching runway — full-surface dimensions, surface, lighting, and per-end designators, headings, and displaced thresholds.',
             ),
+            distanceKm: z
+              .number()
+              .nullable()
+              .describe(
+                'Great-circle distance to the parent airport in kilometers, or null without a query point.',
+              ),
+            bearingDeg: z
+              .number()
+              .nullable()
+              .describe(
+                'Initial bearing to the parent airport in degrees true, or null without a query point.',
+              ),
           })
           .describe('A runway paired with its airport (one row per matching runway).'),
       )
@@ -123,11 +166,11 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Total matching runways before the limit was applied.'),
+    totalCount: z.number().describe('Total matching runways before offset and limit.'),
     truncated: z
       .boolean()
       .optional()
-      .describe('Present and true only when more runways matched than were returned.'),
+      .describe('Present and true only when matches remain after this page.'),
     shown: z
       .number()
       .optional()
@@ -136,19 +179,36 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       .number()
       .optional()
       .describe('The limit that was applied. Present only when results were truncated.'),
+    nextOffset: z
+      .number()
+      .int()
+      .optional()
+      .describe('Offset for the next page with the same query.'),
     notice: z
       .string()
       .optional()
-      .describe('Guidance when nothing matched or results were capped — how to broaden or narrow.'),
+      .describe('Guidance for an empty page, continuation, or a clamped limit.'),
+  },
+
+  enrichmentTrailer: {
+    notice: { render: renderNotice },
   },
 
   handler(input, ctx) {
+    const { latitude, longitude, radius_km, offset } = input;
+    const spatial =
+      latitude !== undefined && longitude !== undefined
+        ? { latitude, longitude, radiusKm: radius_km ?? 100 }
+        : undefined;
+    if (!spatial && (latitude !== undefined || longitude !== undefined || radius_km !== undefined))
+      throw ctx.fail('incomplete_coordinates');
+
     const svc = getAirportDataService();
     if (input.country && !svc.country(input.country))
       throw ctx.fail('unknown_country', `Unknown country code "${input.country}".`);
     if (input.region && !svc.region(input.region))
       throw ctx.fail('unknown_region', `Unknown region code "${input.region}".`);
-    const limit = input.limit ?? getServerConfig().defaultSearchLimit;
+    const { limit, notice: clampNotice } = runwayPageLimit.resolve(input.limit, ctx);
     const result = svc.searchRunways({
       ...(input.country && { country: input.country }),
       ...(input.region && { region: input.region }),
@@ -159,37 +219,42 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       ...(input.lighted !== undefined && { lighted: input.lighted }),
       includeClosedAirports: input.include_closed_airports,
       includeClosedRunways: input.include_closed_runways,
+      ...(spatial && { spatial }),
       limit,
+      offset,
     });
 
     ctx.enrich.total(result.totalMatched);
+    const notices = clampNotice ? [clampNotice] : [];
     const shown = result.matches.length;
-    if (result.totalMatched > shown) {
-      ctx.enrich.truncated({
-        shown,
-        cap: limit,
-        guidance:
-          'Add or tighten filters (country, region, type, surface, min_length_ft, min_width_ft, lighted) or raise `limit` (max 100) to see more.',
-      });
-    }
-
-    if (result.totalMatched === 0) {
+    const nextOffset = offset + shown;
+    if (nextOffset < result.totalMatched) {
+      ctx.enrich.truncated({ shown, cap: limit });
+      ctx.enrich({ nextOffset });
+      notices.push('Use nextOffset as offset with the same query to continue.');
+    } else if (result.totalMatched === 0) {
       const facets = [
         input.country ? `country=${input.country}` : null,
         input.region ? `region=${input.region}` : null,
         input.type ? `type=${input.type}` : null,
-        input.surface ? `surface~"${input.surface}"` : null,
         input.min_length_ft !== undefined ? `min_length_ft=${input.min_length_ft}` : null,
         input.min_width_ft !== undefined ? `min_width_ft=${input.min_width_ft}` : null,
         input.lighted !== undefined ? `lighted=${input.lighted}` : null,
+        spatial
+          ? `within ${spatial.radiusKm} km of ${spatial.latitude}, ${spatial.longitude}`
+          : null,
       ]
         .filter(Boolean)
         .join(', ');
-      ctx.enrich.notice(
-        `No runways matched${facets ? ` ${facets}` : ''}. ` +
-          'Relax filters — surface is a substring match (try a shorter fragment), lower min_length_ft/min_width_ft, verify country/region codes with ourairports_list_countries, or set include_closed_airports/include_closed_runways to widen the set.',
+      notices.push(
+        `No runways matched${facets ? ` ${facets}` : ''}. Relax filters by shortening surface fragments, lowering min_length_ft or min_width_ft, or opting in to closed airports or runways.`,
+      );
+    } else if (shown === 0) {
+      notices.push(
+        `The requested offset ${offset} is past the ${result.totalMatched} matching runways. Use a smaller offset to see results.`,
       );
     }
+    if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
 
     return {
       runways: result.matches.map((m) => ({
@@ -199,17 +264,22 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
           svc.region(m.airport.isoRegion)?.name,
         ),
         runway: toRunway(m.runway),
+        distanceKm: m.distanceKm === null ? null : Math.round(m.distanceKm * 100) / 100,
+        bearingDeg: m.bearingDeg === null ? null : Math.round(m.bearingDeg * 10) / 10,
       })),
     };
   },
 
   format: (result) => {
     const lines = [`## Runway Search — ${result.runways.length} shown`];
-    for (const { airport, runway: r } of result.runways) {
+    for (const { airport, runway: r, distanceKm, bearingDeg } of result.runways) {
       lines.push('');
       lines.push(...renderAirportLines(airport));
       lines.push(`  **Runway ${renderRunwayName(r)}** ${renderRunwaySpec(r)}`);
       lines.push(`  ${renderRunwayEnds(r)}`);
+      lines.push(
+        `  **Distance:** ${numOrDash(distanceKm)} km at bearing ${numOrDash(bearingDeg)}°`,
+      );
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

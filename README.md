@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/ourairports-mcp-server</h1>
   <p><b>Resolve airport codes (IATA/ICAO/GPS/local), search airports, find the nearest by coordinate, and look up runways, navaids, and radio frequencies from the bundled public-domain OurAirports dataset via MCP. STDIO or Streamable HTTP.</b>
-  <div>6 Tools • 1 Resource</div>
+  <div>6 Tools • 1 Airport Resource • 1 Skill</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.6-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.6-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/ourairports-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/ourairports-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/ourairports-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -39,11 +39,11 @@ Airports, runways, navaids, and radio frequencies worldwide from the public-doma
 
 | Tool | Description |
 |:---|:---|
-| `ourairports_search_airports` | Full-text and faceted search over the airport corpus by name, municipality, country, region, or type. Ranked summaries, closed airports excluded by default. |
-| `ourairports_search_runways` | Search runways across all airports by surface, length, width, and lighting, joined back to their airports and filtered by country, region, or airport type. One flat `{ airport, runway }` row per matching runway. |
+| `ourairports_search_airports` | Search exact airport codes, names, keywords, and facets. Ranked summaries with offset continuation; closed airports excluded by default. |
+| `ourairports_search_runways` | Search runways by surface, dimensions, lighting, and airport facets, optionally nearest-first from a coordinate. One row per matching runway. |
 | `ourairports_get_airport` | Full record for one airport resolved by any code (IATA/ICAO/GPS/local/ident), with its runways and radio frequencies inline. |
 | `ourairports_find_airports` | Airports within a radius of a coordinate, ranked nearest-first by great-circle distance, with distance and bearing. |
-| `ourairports_find_navaids` | Navigation aids (VOR, VOR-DME, DME, NDB, NDB-DME, TACAN, VORTAC) near a coordinate or serving a specific airport. |
+| `ourairports_find_navaids` | Navigation aids near a coordinate, serving an airport, or sharing an exact navaid ident. |
 | `ourairports_list_countries` | Countries with airport counts and optional nested regions, filtered by country and/or continent. The lookup table for valid `country`/`region` filters on both search tools. |
 
 ### Resources
@@ -54,15 +54,21 @@ Airports, runways, navaids, and radio frequencies worldwide from the public-doma
 
 All data is also reachable via `ourairports_get_airport` — tool-only clients lose nothing. Not exposed as a resource list (enumerating 85k airports is a dump, not a discovery aid); discovery is `ourairports_search_airports`.
 
+The [OurAirports guide](./skills/ourairports-guide/SKILL.md) covers ambiguous codes and multi-tool airport, navaid, and runway queries. Plugin installs include it; MCP clients can read `skill://ourairports-guide/SKILL.md`.
+
 ## Capability reference
+
+The four search/find tools accept `offset` (default 0). When more rows remain, pass `nextOffset` as the next request's `offset`, keeping the query and data snapshot unchanged. `totalCount` counts all filtered matches; `truncated`, `shown`, and `cap` describe a page with more results after it. A past-end page is empty but retains its total.
+
+Page ceilings are 100 rows for search and 50 for find. Explicit positive integer limits above the ceiling clamp with a notice, request log, and counter increment. Set `OURAIRPORTS_CLAMP_LIMITS=false` to restore strict rejection. Omitted limits use `OURAIRPORTS_DEFAULT_SEARCH_LIMIT` (20), bounded by the tool's ceiling.
 
 ### `ourairports_search_airports` <sub>tool</sub>
 
 - Free-text search over name, municipality, and keywords; tokens are AND-matched (word order and partial words handled)
+- Exact codes match across IATA, ICAO, GPS, local code, and ident; a code-only query ranks its holders before incidental text matches. Hyphenated codes match whole. Name tokens also accept `intl`, `rgnl`, `muni`, `fld`, and `mem` alongside their full spellings. Stopword-only or punctuation-only queries retain their no-searchable-terms result; use `ourairports_get_airport` for an explicit code
 - Faceted filters: `country` (two letters), `region` (two letters followed by one or two hyphen-separated segments of 1–3 letters/digits), and `type`. Codes are case-insensitive with surrounding whitespace ignored; literal `""` is unset, whitespace-only is invalid. Malformed codes fail argument validation; codes absent from the bundled tables raise `unknown_country` / `unknown_region` with discovery guidance. Valid codes with no matching airports remain empty successes
 - Closed airports excluded by default; opt in with `include_closed`
-- Results ranked operational/larger-airports-first, each with its full code set and coordinates for chaining into `ourairports_get_airport`
-- `limit` accepts 1–100 rows and defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT` (20); truncation reports the total matched count, cap, and recovery guidance
+- Results carry the full code set, coordinates, and recorded keywords for chaining into `ourairports_get_airport`; operational/larger-airport ranking applies within the code-match tier
 
 ---
 
@@ -70,12 +76,13 @@ All data is also reachable via `ourairports_get_airport` — tool-only clients l
 
 - Airport facets (`country`, `region`, `type`) narrow the airports first; runway facets (`surface`, `min_length_ft`, `min_width_ft`, `lighted`) then filter their runways
 - Country/region facets follow the same shape, empty-string, normalization, and bundled-membership rules as `ourairports_search_airports`; valid empty selections remain successful
-- `surface` is a case-insensitive substring match against the raw upstream surface string (no controlled vocabulary — a shorter fragment like `asp` matches ASP, ASPH, and Asphalt), not an exact code
-- Returns one flat `{ airport, runway }` row per matching runway — an airport with three matching runways contributes three rows
+- `surface` accepts a case-insensitive substring or a nonempty array of substrings matched with OR. Raw values have no controlled vocabulary: `asp` matches ASP, ASPH, and Asphalt; `con` and `pem` cover other recorded surfaces
+- Optional `latitude` + `longitude` ranks qualifying runways by the parent airport's coordinates, with `radius_km` from 1–20,016 (default 100). Both coordinates are required together; a radius alone is invalid
+- Returns one flat `{ airport, runway, distanceKm, bearingDeg }` row per matching runway — an airport with three matching runways contributes three rows. Distance and bearing are `null` without coordinates; rows then retain dataset traversal order
 - `lengthFt` and `min_length_ft` are the full runway surface as OurAirports records it, including displaced thresholds and overruns — not usable takeoff or landing distance; each runway also carries `leDisplacedThresholdFt` / `heDisplacedThresholdFt` (`null` when none is recorded)
 - A runway whose length or width is unknown is excluded when the matching `min_*_ft` filter is set — never assumed to meet a threshold the data can't confirm
 - Closed airports and closed runways are both excluded unless `include_closed_airports` / `include_closed_runways` is set
-- `limit` accepts 1–100 rows and defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT` (20); truncation reports the total matched count, cap, and recovery guidance
+- Each runway also carries its end-center coordinates and elevation above mean sea level, distinct from displaced thresholds
 
 ---
 
@@ -84,7 +91,8 @@ All data is also reachable via `ourairports_get_airport` — tool-only clients l
 - Resolves a single `code` case-insensitively across all five identifier spaces (priority: ident → ICAO → IATA → GPS → local); surrounding whitespace is ignored
 - Runways and radio frequencies inline; `include` trims the response to a subset, and the output's `included` field distinguishes a relation omitted by `include` from one that genuinely has no records
 - Echoes the airport's complete code set plus a `resolvedVia` / `resolutionNote`; when other airports carry the same code, the note names each one (ident, country, code space) and says whether resolution priority or dataset row order picked this airport, so a wrong resolution is self-correcting — pass the other airport's ident
-- Runways carry full-surface `lengthFt` plus per-end displaced thresholds (`leDisplacedThresholdFt` / `heDisplacedThresholdFt`)
+- Runways carry full-surface `lengthFt`, per-end displaced thresholds, and each end center's latitude, longitude, and elevation in feet above mean sea level
+- Airport detail includes recorded keywords, `wikipediaLink`, and `homeLink`; valid web links are clickable in text output, and malformed recorded values remain visible as text
 - Absent codes reported as `null`; closed airports always resolve
 - `unknown_code` error with a recovery hint when no identifier space matches
 
@@ -93,21 +101,22 @@ All data is also reachable via `ourairports_get_airport` — tool-only clients l
 ### `ourairports_find_airports` <sub>tool</sub>
 
 - Great-circle (haversine) ranking, nearest-first, each result with `distanceKm` and `bearingDeg` (degrees true) from the query point
-- `radius_km` (1–500, default 100); `limit` (1–50) defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT`, clamped to this tool's 50-row max; optional `type` filter; `include_closed` opt-in
+- `radius_km` (1–20,016, default 100); optional `type` filter; `include_closed` opt-in
 - Coordinate in, ranked airports out — no geocoding; resolve place names to lat/lon upstream first
-- `totalCount` is the filtered in-radius count before `limit`; truncation reports the cap and recovery guidance (narrow `radius_km`, add `type`, or raise `limit`)
-- Empty-radius guidance suggesting a wider `radius_km`
+- `totalCount` is the filtered in-radius count before paging; `nextOffset` reaches farther results
+- Empty-radius guidance suggests a wider radius only below the global ceiling
 
 ---
 
 ### `ourairports_find_navaids` <sub>tool</sub>
 
-- **Coordinate mode:** `latitude` + `longitude` (+ optional `radius_km`, 1–500, default 100) ranks navaids nearest-first with distance and bearing; `limit` (1–50) defaults to `OURAIRPORTS_DEFAULT_SEARCH_LIMIT`, clamped to 50
+- **Coordinate mode:** `latitude` + `longitude` (+ optional `radius_km`, 1–20,016, default 100) ranks navaids nearest-first with distance and bearing
 - **Airport mode:** `airport_code` returns the navaids serving that airport
-- Exactly one complete mode required — both modes, neither mode, or incomplete coordinates raise `mode_conflict`; incomplete-coordinate messages name the missing counterpart
+- **Ident mode:** `ident` matches an exact navaid code, case-insensitively after trimming, and returns all holders in dataset order, including navaids without an associated airport. `type` can narrow shared idents
+- Exactly one complete mode required — overlapping modes, no mode, or incomplete coordinates raise `mode_conflict`; incomplete-coordinate messages name the missing counterpart
 - `frequencyKhz` is the stored value for every type (a VOR on 114.5 MHz reads 114500); `frequencyMhz` carries the VHF frequency of a VOR or VOR-DME and the paired VHF frequency of a DME, TACAN, or VORTAC, and is `null` for NDB and NDB-DME, which tune in kHz; an upstream `-1` placeholder reads as `null`
 - Each navaid carries its service-volume metadata as recorded upstream: `usageType` (HI, LO, BOTH, TERMINAL, RNAV), `power`, `magneticVariationDeg` (actual, positive east), `slavedVariationDeg` (the variation built into the radials), and `dmeFrequencyKhz` (the DME's paired VHF frequency) — `null` where the dataset has no value
-- `totalCount` is the match count before `limit` in both modes; truncation reports the cap and recovery guidance
+- `totalCount` is the match count before paging in every mode. Non-coordinate results have null distance and bearing; `airportIdent` is populated only in airport mode
 - Airport mode distinguishes "airport not found" (`unknown_code` error) from "airport found but has no associated navaids" (empty list with a note)
 - Airport mode adds a `resolutionNote` when `airport_code` is also a code of other airports, naming them by ident — the same note `ourairports_get_airport` returns
 
@@ -137,10 +146,10 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 OurAirports-specific:
 
 - Bundled, public-domain dataset baked into the package and Docker image — zero runtime API, no key, no rate limit, no upstream outage
-- In-memory indices built once at startup: id maps, a priority-ordered unified code index, airport-ref joins for runways and frequencies, an ident-keyed navaid join, a flat `Float64Array` of coordinates, country/region maps, and a tokenized text-search index
+- In-memory indices built once at startup: id maps, a priority-ordered unified code index, airport-ref joins for runways and frequencies, navaid indices for associated airports and exact idents, a flat `Float64Array` of coordinates, country/region maps, and a tokenized text-search index
 - Brute-force haversine nearest-neighbour over the coordinate array — a few milliseconds across 85k airports, no spatial-index dependency
 - CSVs parsed by header name, not column position, so an upstream column reorder can't silently misalign fields
-- Airport search retains at most `limit` ranked candidates; runway search retains its first `limit` rows while both count every match
+- Ranked queries retain at most `offset + limit` candidates; unranked queries skip to the requested window. Both count every match
 
 Agent-friendly output:
 
@@ -151,120 +160,32 @@ Agent-friendly output:
 
 ## Getting started
 
-### Public Hosted Instance
+Connect to the hosted server from Claude Code:
 
-A public instance is available at `https://ourairports.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP, with this client config:
-
-```json
-{
-  "mcpServers": {
-    "ourairports-mcp-server": {
-      "type": "streamable-http",
-      "url": "https://ourairports.caseyjhand.com/mcp"
-    }
-  }
-}
+```sh
+claude mcp add --transport http ourairports-mcp-server https://ourairports.caseyjhand.com/mcp
 ```
 
-### Self-Hosted / Local
+To run locally:
 
-Add the following to your MCP client configuration file.
-
-```json
-{
-  "mcpServers": {
-    "ourairports-mcp-server": {
-      "type": "stdio",
-      "command": "bunx",
-      "args": ["@cyanheads/ourairports-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info"
-      }
-    }
-  }
-}
+```sh
+claude mcp add ourairports-mcp-server -- npx -y @cyanheads/ourairports-mcp-server
 ```
 
-Or with npx (no Bun required):
+For other clients, add this to the MCP configuration file:
 
 ```json
 {
   "mcpServers": {
     "ourairports-mcp-server": {
-      "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@cyanheads/ourairports-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info"
-      }
+      "args": ["-y", "@cyanheads/ourairports-mcp-server"]
     }
   }
 }
 ```
 
-Or with Docker:
-
-```json
-{
-  "mcpServers": {
-    "ourairports-mcp-server": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "MCP_TRANSPORT_TYPE=stdio",
-        "ghcr.io/cyanheads/ourairports-mcp-server:latest"
-      ]
-    }
-  }
-}
-```
-
-No API key is required — the dataset ships with the package and the image.
-
-For Streamable HTTP, set the transport and start the server:
-
-```sh
-MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
-# Server listens at http://localhost:3010/mcp
-```
-
-### Prerequisites
-
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
-- No API key, account, or external service — all data is bundled.
-
-### Installation
-
-1. **Clone the repository:**
-
-```sh
-git clone https://github.com/cyanheads/ourairports-mcp-server.git
-```
-
-2. **Navigate into the directory:**
-
-```sh
-cd ourairports-mcp-server
-```
-
-3. **Install dependencies:**
-
-```sh
-bun install
-```
-
-4. **Fetch and bundle the dataset** (writes the six CSVs into `data/`):
-
-```sh
-bun run build:data
-```
-
-### Refreshing the data
-
-The bundled snapshot is as fresh as the last `build:data` run (or, for the Docker image, the last build). To pull the latest daily drop from the OurAirports mirror, re-run `bun run build:data` and rebuild. The build validates country/region code shapes and airport references against the lookup tables before writing the fetched bundle; `bun run build:data --check` validates an existing bundle. To point at an existing local data drop without rebuilding, set `OURAIRPORTS_DATA_DIR`.
+The package and Docker image include the dataset. For Docker or a source build, see [Running the server](#running-the-server).
 
 ## Configuration
 
@@ -272,13 +193,14 @@ The bundled snapshot is as fresh as the last `build:data` run (or, for the Docke
 |:---|:---|:---|
 | `OURAIRPORTS_DATA_DIR` | Directory holding the six OurAirports CSV files. Overridable to point at a fresher local data drop. | Bundled `data/` |
 | `OURAIRPORTS_DEFAULT_SEARCH_LIMIT` | Default result cap for the search/find tools when the caller omits `limit` (1–100). | `20` |
+| `OURAIRPORTS_CLAMP_LIMITS` | Clamp explicit limits above each tool's page ceiling; `false` restores strict rejection. | `true` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for the HTTP server. | `3010` |
 | `MCP_HTTP_ENDPOINT_PATH` | HTTP endpoint path where the server is mounted. | `/mcp` |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_SESSION_MODE` | HTTP session mode: `stateful`, `stateless`, or `auto`. This server uses stateless mode because no tool requests follow-up input. | `stateless` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
-| `LOGS_DIR` | Directory for log files (Node.js only). | `<project-root>/logs` |
+| `LOGS_DIR` | Directory for log files (Node.js only). Relative paths resolve from the server's package directory. | `<server-package>/logs` |
 | `STORAGE_PROVIDER_TYPE` | Storage backend (unused on the data path — the index is in-memory). | `in-memory` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |
 
@@ -287,6 +209,15 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 ## Running the server
 
 ### Local development
+
+Source builds require [Bun v1.4.4](https://bun.sh/) or newer. The installed package also runs on Node.js v24 or newer.
+
+- **Clone and install:**
+
+  ```sh
+  git clone https://github.com/cyanheads/ourairports-mcp-server.git
+  cd ourairports-mcp-server && bun install
+  ```
 
 - **Build and run:**
 
@@ -312,11 +243,14 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 ### Docker
 
 ```sh
-docker build -t ourairports-mcp-server .
-docker run --rm -i -e MCP_TRANSPORT_TYPE=stdio ourairports-mcp-server
+docker run --rm -p 127.0.0.1:3010:3010 ghcr.io/cyanheads/ourairports-mcp-server:latest
 ```
 
-The build stage runs `bun run build:data` so the dataset is fetched and baked into the image — the resulting container is fully self-contained and makes no network calls at runtime. The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/ourairports-mcp-server`. OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
+The image serves stateless HTTP at `http://localhost:3010/mcp` and logs to `/var/log/ourairports-mcp-server`. For a stdio client, use `"command": "docker"` with `"args": ["run", "-i", "--rm", "-e", "MCP_TRANSPORT_TYPE=stdio", "ghcr.io/cyanheads/ourairports-mcp-server:latest"]`. To build locally, run `docker build -t ourairports-mcp-server .`. Use `--build-arg OTEL_ENABLED=false` to omit OpenTelemetry peers.
+
+### Refreshing the data
+
+Run `bun run build:data` and rebuild to pick up the latest daily CSV snapshot. The build validates country and region codes and airport references before writing the bundle. Use `bun run build:data --check` to validate an existing bundle, or set `OURAIRPORTS_DATA_DIR` to use a local data drop without rebuilding.
 
 ## Project structure
 

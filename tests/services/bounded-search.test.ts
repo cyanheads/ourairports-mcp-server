@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { forEachRow } from '@/services/airport-data/csv.js';
+import { nearest } from '@/services/airport-data/geo.js';
 import type { Airport } from '@/services/airport-data/types.js';
 import { FIXTURE_DATA_DIR, loadFixtureService } from '../fixtures/load.js';
 
@@ -118,5 +119,62 @@ describe('bounded search selection', () => {
     } finally {
       Array.prototype.push = original;
     }
+  });
+
+  it('pages ranked search through exact ties and keeps the count past the end', () => {
+    const search = (offset: number) =>
+      svc.search({ query: 'tied', includeClosed: true, country: 'FR', limit: 1, offset });
+    expect(search(0)).toMatchObject({ airports: [{ ident: 'TIE-A' }], totalMatched: 2 });
+    expect(search(1)).toMatchObject({ airports: [{ ident: 'TIE-B' }], totalMatched: 2 });
+    expect(search(2)).toEqual({ airports: [], totalMatched: 2 });
+    expect(search(Number.MAX_SAFE_INTEGER)).toEqual({ airports: [], totalMatched: 2 });
+  });
+
+  it('retains only the requested prefix for distance pages while counting the full globe', () => {
+    const coordinates = new Float64Array([0, 4, 0, 3, 0, -2, 0, 2, 0, 1, 0, 0, 0, 180]);
+    const sort = vi.spyOn(Array.prototype, 'sort');
+    try {
+      const result = nearest(coordinates, 0, 0, 20016, 1, () => true, 2);
+      expect(result.hits.map((hit) => hit.index)).toEqual([2]);
+      expect(result.total).toBe(7);
+      expect(sort.mock.contexts.map((context) => (context as unknown[]).length)).toEqual([3]);
+    } finally {
+      sort.mockRestore();
+    }
+    expect(nearest(coordinates, 0, 0, 20016, 1, () => true, 3).hits[0]?.index).toBe(3);
+    expect(nearest(coordinates, 0, 0, 20016, 1, () => true, 7)).toEqual({ hits: [], total: 7 });
+  });
+
+  it('pages spatial runway rows by airport distance, retaining traversal ties and full totals', () => {
+    const filters = {
+      includeClosedAirports: false,
+      includeClosedRunways: false,
+      limit: 1,
+      spatial: { latitude: 47.529999, longitude: -122.302002, radiusKm: 10 },
+      surface: ['cOn', 'AsP'],
+    };
+    const search = (offset: number) => svc.searchRunways({ ...filters, offset });
+    expect(search(0)).toMatchObject({
+      matches: [{ runway: { id: 700100 }, distanceKm: 0 }],
+      totalMatched: 3,
+    });
+    expect(search(1)).toMatchObject({ matches: [{ runway: { id: 244323 } }], totalMatched: 3 });
+    expect(search(2)).toMatchObject({ matches: [{ runway: { id: 244324 } }], totalMatched: 3 });
+    expect(search(1).matches[0]?.distanceKm).toBeCloseTo(9.02, 1);
+    expect(search(1).matches[0]?.bearingDeg).toBeCloseTo(183.34, 0);
+    expect(search(2).matches[0]?.distanceKm).toBe(search(1).matches[0]?.distanceKm);
+    expect(search(3)).toEqual({ matches: [], totalMatched: 3 });
+    expect(
+      svc.searchRunways({ ...filters, spatial: { ...filters.spatial, radiusKm: 9 } }),
+    ).toMatchObject({
+      matches: [{ runway: { id: 700100 } }],
+      totalMatched: 1,
+    });
+    const { spatial: _, ...unrankedFilters } = filters;
+    const unranked = svc.searchRunways({ ...unrankedFilters, offset: 1 });
+    expect(unranked).toMatchObject({
+      matches: [{ runway: { id: 244324 }, distanceKm: null, bearingDeg: null }],
+      totalMatched: 7,
+    });
   });
 });

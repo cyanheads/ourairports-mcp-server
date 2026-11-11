@@ -8,15 +8,18 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { getServerConfig } from '@/config/server-config.js';
+import { pageLimit } from '@/mcp-server/tools/page-limit.js';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
+import { MAX_RADIUS_KM } from '@/services/airport-data/geo.js';
 import { AIRPORT_TYPES } from '@/services/airport-data/types.js';
 import { AirportSummarySchema, renderAirportLines, toAirportSummary } from './_schemas.js';
+
+const airportPageLimit = pageLimit(50);
 
 export const findAirportsTool = tool('ourairports_find_airports', {
   title: 'Find Airports',
   description:
-    'Find airports within a radius of a latitude/longitude, ranked nearest-first by great-circle distance, each with its distance (km) and bearing (degrees true) from the query point. The grounding tool for "nearest airport to here" — pair it with a live aviation server to fetch weather or positions for the result. Takes a coordinate only: no geocoding, so resolve place names to lat/lon upstream first (e.g. an OpenStreetMap or Open-Meteo geocode tool). Closed airports are excluded unless include_closed is set. totalCount is the in-radius match count before limit; a capped result says so. OurAirports is community-edited — not authoritative for flight operations.',
+    'Find airports within a radius of a latitude/longitude, ranked nearest-first by great-circle distance. Each result includes distance in kilometers and bearing in degrees true from the query point. Resolve place names to coordinates before calling. Use nextOffset to continue the same query. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   input: z.object({
@@ -33,9 +36,9 @@ export const findAirportsTool = tool('ourairports_find_airports', {
     radius_km: z
       .number()
       .min(1)
-      .max(500)
+      .max(MAX_RADIUS_KM)
       .default(100)
-      .describe('Search radius in kilometers (1–500). Defaults to 100.'),
+      .describe(`Search radius in kilometers (1–${MAX_RADIUS_KM}). Defaults to 100.`),
     type: z
       .enum(AIRPORT_TYPES)
       .optional()
@@ -44,15 +47,13 @@ export const findAirportsTool = tool('ourairports_find_airports', {
       .boolean()
       .default(false)
       .describe('Include airports of type "closed". Off by default.'),
-    limit: z
+    limit: airportPageLimit.schema,
+    offset: z
       .number()
       .int()
-      .min(1)
-      .max(50)
-      .optional()
-      .describe(
-        'Maximum airports to return (1–50). Defaults to OURAIRPORTS_DEFAULT_SEARCH_LIMIT (20).',
-      ),
+      .min(0)
+      .default(0)
+      .describe('Matching airports to skip. Defaults to 0. Use nextOffset to continue.'),
   }),
 
   output: z.object({
@@ -81,12 +82,12 @@ export const findAirportsTool = tool('ourairports_find_airports', {
     totalCount: z
       .number()
       .describe(
-        'Airports within the radius that pass the type and include_closed filters, counted before the limit was applied.',
+        'Airports within the radius that pass the type and include_closed filters, counted before offset and limit.',
       ),
     truncated: z
       .boolean()
       .optional()
-      .describe('Present and true only when more airports matched than were returned.'),
+      .describe('Present and true only when matches remain after this page.'),
     shown: z
       .number()
       .optional()
@@ -95,19 +96,20 @@ export const findAirportsTool = tool('ourairports_find_airports', {
       .number()
       .optional()
       .describe('The limit that was applied. Present only when results were truncated.'),
+    nextOffset: z
+      .number()
+      .int()
+      .optional()
+      .describe('Offset for the next page with the same query.'),
     notice: z
       .string()
       .optional()
-      .describe(
-        'Guidance when no airport fell within the radius or results were capped — how to widen or narrow.',
-      ),
+      .describe('Guidance for an empty page, continuation, or a clamped limit.'),
   },
 
   handler(input, ctx) {
     const svc = getAirportDataService();
-    // Honor OURAIRPORTS_DEFAULT_SEARCH_LIMIT when limit is omitted, clamped to
-    // this tool's own max of 50 (the config ceiling is 100) (#4).
-    const limit = Math.min(input.limit ?? getServerConfig().defaultSearchLimit, 50);
+    const { limit, notice: clampNotice } = airportPageLimit.resolve(input.limit, ctx);
     const { airports: hits, totalMatched } = svc.nearbyAirports(
       input.latitude,
       input.longitude,
@@ -115,23 +117,29 @@ export const findAirportsTool = tool('ourairports_find_airports', {
       limit,
       input.type,
       input.include_closed,
+      input.offset,
     );
 
     ctx.enrich.total(totalMatched);
-    // Truncation (≥ 1 shown) and the empty-radius notice are mutually exclusive.
-    if (totalMatched > hits.length) {
-      ctx.enrich.truncated({
-        shown: hits.length,
-        cap: limit,
-        guidance: `Results are nearest-first, so the omitted airports lie farther out. ${input.type ? 'Narrow radius_km or raise' : 'Narrow radius_km, add a type filter, or raise'} \`limit\` (max 50) to see more.`,
-      });
+    const notices = clampNotice ? [clampNotice] : [];
+    const nextOffset = input.offset + hits.length;
+    if (nextOffset < totalMatched) {
+      ctx.enrich.truncated({ shown: hits.length, cap: limit });
+      ctx.enrich({ nextOffset });
+      notices.push('Use nextOffset as offset with the same query to continue.');
     } else if (totalMatched === 0) {
-      ctx.enrich.notice(
-        `No airports within ${input.radius_km} km of ${input.latitude}, ${input.longitude}` +
-          `${input.type ? ` of type ${input.type}` : ''}. Widen radius_km (max 500)` +
-          `${input.type ? ', drop the type filter,' : ''}${input.include_closed ? '' : ' or set include_closed'} and retry.`,
+      notices.push(
+        `No airports within ${input.radius_km} km of ${input.latitude}, ${input.longitude}${input.type ? ` of type ${input.type}` : ''}.`,
+      );
+      if (input.radius_km < MAX_RADIUS_KM) notices.push(`Widen radius_km (max ${MAX_RADIUS_KM}).`);
+      if (input.type) notices.push('Drop the type filter.');
+      if (!input.include_closed) notices.push('Set include_closed to include closed airports.');
+    } else if (hits.length === 0) {
+      notices.push(
+        `Offset ${input.offset} is past the ${totalMatched} matching airports. Use a smaller offset to see results.`,
       );
     }
+    if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
 
     return {
       airports: hits.map((h) => ({

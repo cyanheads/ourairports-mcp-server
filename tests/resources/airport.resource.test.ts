@@ -56,6 +56,23 @@ describe('airportResource runway thresholds and resolution note', () => {
       await airportResource.handler(airportResource.params!.parse({ code }), createMockContext()),
     );
 
+  it('exposes the recorded airport detail and runway-end geometry through the output schema', async () => {
+    const result = await read('KSEA');
+    expect(result.airport).toMatchObject({
+      keywords: 'Sea-Tac, SeaTac',
+      homeLink: 'https://www.portseattle.org/sea-tac',
+      wikipediaLink: 'https://en.wikipedia.org/wiki/Seattle%E2%80%93Tacoma_International_Airport',
+    });
+    expect(result.runways.find((r) => r.id === 244324)).toMatchObject({
+      leLatitudeDeg: 47.46315,
+      leLongitudeDeg: -122.31173,
+      leElevationFt: 425,
+      heLatitudeDeg: 47.43922,
+      heLongitudeDeg: -122.31146,
+      heElevationFt: 400,
+    });
+  });
+
   it('exposes displaced thresholds through RunwaySchema (VIDP 271000), null when not recorded', async () => {
     const result = await read('VIDP');
     expect(result.runways.find((r) => r.id === 271000)).toMatchObject({

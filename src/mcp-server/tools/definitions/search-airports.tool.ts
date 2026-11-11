@@ -8,7 +8,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { getServerConfig } from '@/config/server-config.js';
+import { pageLimit } from '@/mcp-server/tools/page-limit.js';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
 import { AIRPORT_TYPES } from '@/services/airport-data/types.js';
 import {
@@ -16,13 +16,16 @@ import {
   CountryCodeSchema,
   RegionCodeSchema,
   renderAirportLines,
+  renderNotice,
   toAirportSummary,
 } from './_schemas.js';
+
+const airportPageLimit = pageLimit(100);
 
 export const searchAirportsTool = tool('ourairports_search_airports', {
   title: 'Search Airports',
   description:
-    'Search the bundled OurAirports corpus by free-text (name / municipality / keywords) and/or facets (country, region, type). Every query token must match (word order and partial words are handled). Returns ranked airport summaries — operational and larger airports first — each with its full code set and coordinates, ready to chain into ourairports_get_airport. Closed airports are excluded unless include_closed is set. Use ourairports_list_countries for valid country/region codes. For "nearest airport to a coordinate" use ourairports_find_airports instead. OurAirports is community-edited — not authoritative for flight operations.',
+    'Search the bundled OurAirports corpus by exact airport code, free text (name, municipality, keywords), and/or facets (country, region, type). All query terms must match. Text supports forward prefixes and common abbreviations such as intl. Exact code matches lead code-only searches, followed by ranked summaries favoring operational and larger airports. Use ourairports_get_airport for full records by code, ourairports_list_countries for valid country and region codes, and ourairports_find_airports for nearest airports. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   errors: [
@@ -46,7 +49,7 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
       .string()
       .optional()
       .describe(
-        'Free-text search over airport name, municipality, and keywords. Tokens are AND-matched. Omit to browse purely by facets.',
+        'Exact IATA, ICAO, GPS, local code or ident, or text from an airport name, municipality, or keywords. Omit to browse by facets.',
       ),
     country: CountryCodeSchema,
     region: RegionCodeSchema,
@@ -62,15 +65,13 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
       .describe(
         'Include airports of type "closed". Off by default — closed airports pollute the live-flight grounding use case.',
       ),
-    limit: z
+    limit: airportPageLimit.schema,
+    offset: z
       .number()
       .int()
-      .min(1)
-      .max(100)
-      .optional()
-      .describe(
-        'Maximum airports to return (1–100). Defaults to OURAIRPORTS_DEFAULT_SEARCH_LIMIT (20).',
-      ),
+      .min(0)
+      .default(0)
+      .describe('Matching airports to skip. Defaults to 0. Use nextOffset to continue.'),
   }),
 
   output: z.object({
@@ -80,11 +81,11 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Total airports matched before the limit was applied.'),
+    totalCount: z.number().describe('Total matching airports before offset and limit.'),
     truncated: z
       .boolean()
       .optional()
-      .describe('Present and true only when more airports matched than were returned.'),
+      .describe('Present and true only when matches remain after this page.'),
     shown: z
       .number()
       .optional()
@@ -93,10 +94,19 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
       .number()
       .optional()
       .describe('The limit that was applied. Present only when results were truncated.'),
+    nextOffset: z
+      .number()
+      .int()
+      .optional()
+      .describe('Offset for the next page with the same query.'),
     notice: z
       .string()
       .optional()
-      .describe('Guidance when nothing matched or results were capped — how to broaden or narrow.'),
+      .describe('Guidance for an empty page, continuation, or a clamped limit.'),
+  },
+
+  enrichmentTrailer: {
+    notice: { render: renderNotice },
   },
 
   handler(input, ctx) {
@@ -105,7 +115,7 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
       throw ctx.fail('unknown_country', `Unknown country code "${input.country}".`);
     if (input.region && !svc.region(input.region))
       throw ctx.fail('unknown_region', `Unknown region code "${input.region}".`);
-    const limit = input.limit ?? getServerConfig().defaultSearchLimit;
+    const { limit, notice: clampNotice } = airportPageLimit.resolve(input.limit, ctx);
     const result = svc.search({
       ...(input.query && { query: input.query }),
       ...(input.country && { country: input.country }),
@@ -113,23 +123,21 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
       ...(input.type && { type: input.type }),
       includeClosed: input.include_closed,
       limit,
+      offset: input.offset,
     });
 
     ctx.enrich.total(result.totalMatched);
+    const notices = clampNotice ? [clampNotice] : [];
     const shown = result.airports.length;
-    if (result.totalMatched > shown) {
-      ctx.enrich.truncated({
-        shown,
-        cap: limit,
-        guidance:
-          'Add or tighten filters (country, region, type) or raise `limit` (max 100) to see more.',
-      });
+    const nextOffset = input.offset + shown;
+    if (nextOffset < result.totalMatched) {
+      ctx.enrich.truncated({ shown, cap: limit });
+      ctx.enrich({ nextOffset });
+      notices.push('Use nextOffset as offset with the same query to continue.');
     }
-
     if (result.noSearchableTerms) {
-      ctx.enrich.notice(
-        `The query "${input.query}" contains no searchable terms — only common words (the, of, and) or punctuation, which the index drops. ` +
-          'Provide a distinctive word from the airport name or municipality, or omit query and filter by country/region/type.',
+      notices.push(
+        `The query "${input.query}" contains no searchable terms — only common words (the, of, and) or punctuation, which the index drops. Provide a distinctive word from the airport name or municipality, or omit query and filter by country/region/type.`,
       );
     } else if (result.totalMatched === 0) {
       const facets = [
@@ -139,11 +147,16 @@ export const searchAirportsTool = tool('ourairports_search_airports', {
       ]
         .filter(Boolean)
         .join(', ');
-      ctx.enrich.notice(
-        `No airports matched${input.query ? ` "${input.query}"` : ''}${facets ? ` with ${facets}` : ''}. ` +
-          'Broaden the query, relax facets, verify country/region codes with ourairports_list_countries, or set include_closed if you expect a closed field.',
+      notices.push(
+        `No airports matched${input.query ? ` "${input.query}"` : ''}${facets ? ` with ${facets}` : ''}. Broaden the query, relax facets, verify country/region codes with ourairports_list_countries, or set include_closed if you expect a closed field.`,
+      );
+      if (input.query) notices.push('If you have an airport code, try ourairports_get_airport.');
+    } else if (shown === 0) {
+      notices.push(
+        `Offset ${input.offset} is past the ${result.totalMatched} matching airports. Use a smaller offset to see results.`,
       );
     }
+    if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
 
     return {
       airports: result.airports.map((a) =>

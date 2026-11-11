@@ -20,7 +20,8 @@ import { logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { bool, compact, forEachRow, int, num, positiveInt, reqInt, reqStr, str } from './csv.js';
 import { resolveBundledDataDir } from './data-dir.js';
-import { bearingDeg, nearest } from './geo.js';
+import { bearingDeg, haversineKm, nearest } from './geo.js';
+import { RankedPage } from './ranked-page.js';
 import type {
   Airport,
   AirportNavaidsResult,
@@ -69,6 +70,18 @@ const CODE_PRIORITY: readonly { via: ResolvedVia; key: keyof Airport }[] = [
 ] as const;
 
 const STOPWORD = new Set(['the', 'of', 'and', 'a', 'an']);
+const NAME_EXPANSIONS = new Map([
+  ['intl', 'international'],
+  ['rgnl', 'regional'],
+  ['muni', 'municipal'],
+  ['fld', 'field'],
+  ['mem', 'memorial'],
+]);
+
+interface SearchTerm {
+  codeHolders: ReadonlySet<number> | undefined;
+  tokens: string[];
+}
 
 /**
  * Force a full GC so the transient parse garbage (raw file strings, per-field
@@ -109,6 +122,7 @@ export class AirportDataService {
   private readonly runwaysByAirportRef = new Map<number, Runway[]>();
   private readonly frequenciesByAirportRef = new Map<number, Frequency[]>();
   private readonly navaidsByAirportIdent = new Map<string, Navaid[]>();
+  private readonly navaidIdentIndex = new Map<string, Navaid[]>();
   private readonly countriesByCode = new Map<string, Country>();
   private readonly regionsByCode = new Map<string, Region>();
   /** alpha-2 country code → airport count (excludes closed). */
@@ -411,6 +425,7 @@ export class AirportDataService {
 
       // navaidList index == coordinate index (both arrays grow in lockstep).
       this.navaidList.push(navaid);
+      pushToMap(this.navaidIdentIndex, navaid.ident.toUpperCase(), navaid);
       lats.push(lat);
       lons.push(lon);
 
@@ -473,26 +488,50 @@ export class AirportDataService {
 
   /**
    * Full-text + faceted airport search. Filters the complete corpus (not a
-   * page): strict token-AND match on name/municipality/keywords for `query`,
-   * exact-match facets for country/region/type, closed excluded unless opted in.
-   * Ranks by a light relevance heuristic, then truncates to `limit`.
+   * page): AND across terms with exact code matches and forward text prefixes.
+   * Applies country/region/type facets and excludes closed airports by default.
    */
   search(filters: SearchFilters): SearchResult {
     // A query of only stopwords/punctuation tokenizes to nothing. That is NOT
     // the same as an omitted/blank query (which browses by facets): the caller
     // supplied search intent that matched no searchable term, so return zero
     // with a flag the tool turns into a "no searchable terms" notice (#3).
-    const hasQuery = filters.query !== undefined && filters.query.trim().length > 0;
-    const queryTokens = hasQuery ? tokenize(filters.query as string) : [];
-    if (hasQuery && queryTokens.length === 0) {
+    const query = filters.query?.trim() ?? '';
+    const terms: SearchTerm[] = [];
+    let exactCodeHolders: ReadonlySet<number> | undefined;
+    if (query) {
+      const words = query.split(/\s+/);
+      for (const word of words) {
+        const tokens = tokenize(word);
+        if (tokens.length === 0) continue;
+        const code = word.toUpperCase();
+        const winner = this.codeIndex.get(code);
+        const codeHolders = winner === undefined ? undefined : new Set([winner]);
+        if (codeHolders) {
+          for (const holder of this.sharedCodeHolders.get(code) ?? []) {
+            codeHolders.add(holder.airport.id);
+          }
+          if (words.length === 1) exactCodeHolders = codeHolders;
+        }
+        terms.push({ tokens, codeHolders });
+      }
+    }
+    if (query && terms.length === 0) {
       return { airports: [], totalMatched: 0, noSearchableTerms: true };
     }
+    const queryTokens = terms.flatMap((term) => term.tokens);
+    const upperQuery = query.toUpperCase();
+    const expandedNameTerms = queryTokens.some((token) => NAME_EXPANSIONS.has(token))
+      ? queryTokens
+      : undefined;
     const country = filters.country?.toUpperCase();
     const region = filters.region?.toUpperCase();
-    const matched: { airport: Airport; score: number; order: number }[] = [];
-    type Candidate = (typeof matched)[number];
+    type Candidate = { airport: Airport; exactCode: number; score: number; order: number };
+    const compareRank = (airport: Airport, exactCode: number, score: number, b: Candidate) =>
+      b.exactCode - exactCode || b.score - score || airport.name.localeCompare(b.airport.name);
     const compare = (a: Candidate, b: Candidate) =>
-      b.score - a.score || a.airport.name.localeCompare(b.airport.name) || a.order - b.order;
+      compareRank(a.airport, a.exactCode, a.score, b) || a.order - b.order;
+    const page = new RankedPage(filters.limit, filters.offset ?? 0, compare);
     let totalMatched = 0;
 
     for (const airport of this.airportsById.values()) {
@@ -501,52 +540,29 @@ export class AirportDataService {
       if (country && airport.isoCountry?.toUpperCase() !== country) continue;
       if (region && airport.isoRegion?.toUpperCase() !== region) continue;
 
-      if (queryTokens.length > 0) {
+      if (terms.length > 0) {
         const tokens = this.tokensByAirportId.get(airport.id);
         if (!tokens) continue;
-        if (!queryTokens.every((t) => hasTokenPrefix(tokens, t))) continue;
-      }
-      const score = scoreAirport(airport, hasQuery ? filters.query : undefined);
-      const order = totalMatched++;
-      // Worst candidate at the root: reject without allocating a row once full.
-      const worst = matched[0];
-      if (matched.length === filters.limit && worst) {
-        const rank = worst.score - score || airport.name.localeCompare(worst.airport.name);
-        if (rank >= 0) continue; // Later dataset rows lose all comparator ties.
-        matched[0] = { airport, score, order };
-        let parent = 0;
-        while (parent * 2 + 1 < matched.length) {
-          let child = parent * 2 + 1;
-          if (
-            child + 1 < matched.length &&
-            compare(matched[child + 1] as Candidate, matched[child] as Candidate) > 0
+        if (
+          !terms.every(
+            ({ codeHolders, tokens: needles }) =>
+              codeHolders?.has(airport.id) ||
+              needles.every((needle) => matchesTextToken(tokens, needle)),
           )
-            child++;
-          if (compare(matched[parent] as Candidate, matched[child] as Candidate) >= 0) break;
-          [matched[parent], matched[child]] = [
-            matched[child] as Candidate,
-            matched[parent] as Candidate,
-          ];
-          parent = child;
-        }
-      } else {
-        matched.push({ airport, score, order });
-        let child = matched.length - 1;
-        while (child > 0) {
-          const parent = Math.floor((child - 1) / 2);
-          if (compare(matched[parent] as Candidate, matched[child] as Candidate) >= 0) break;
-          [matched[parent], matched[child]] = [
-            matched[child] as Candidate,
-            matched[parent] as Candidate,
-          ];
-          child = parent;
-        }
+        )
+          continue;
       }
+      const exactCode = exactCodeHolders?.has(airport.id) ? 1 : 0;
+      const score = scoreAirport(airport, upperQuery, expandedNameTerms);
+      const order = totalMatched++;
+      // Later dataset rows lose comparator ties. Reject before allocating a candidate.
+      const worst = page.worst;
+      if (worst && compareRank(airport, exactCode, score, worst) >= 0) continue;
+      page.offer({ airport, exactCode, score, order });
     }
 
-    matched.sort(compare);
     return {
-      airports: matched.map((m) => m.airport),
+      airports: page.rows().map((m) => m.airport),
       totalMatched,
     };
   }
@@ -557,8 +573,8 @@ export class AirportDataService {
    * (country/region/type, closed airports excluded unless opted in) narrow the
    * airport set first, then each surviving airport's runways are filtered by
    * surface (case-insensitive substring), min length/width, lighting, and the
-   * closed-runway flag. Emits flat `{ airport, runway }` rows — one per matching
-   * runway — keep the first `limit` rows while counting every match.
+   * closed-runway flag. Returns one row per runway in airport/runway traversal
+   * order, or in parent-airport distance order when a spatial filter is set.
    *
    * Sparse thresholds exclude: when `minLengthFt`/`minWidthFt` is set, a runway
    * with an unknown value for that field is dropped, never assumed to pass — the
@@ -567,8 +583,19 @@ export class AirportDataService {
   searchRunways(filters: RunwaySearchFilters): RunwaySearchResult {
     const country = filters.country?.toUpperCase();
     const region = filters.region?.toUpperCase();
-    const surface = filters.surface?.trim().toLowerCase();
+    const surfaces = typeof filters.surface === 'string' ? [filters.surface] : filters.surface;
+    const fragments = surfaces?.map((fragment) => fragment.trim().toLowerCase());
+    const { spatial } = filters;
+    const offset = filters.offset ?? 0;
     const matches: RunwayMatch[] = [];
+    type Candidate = { airport: Airport; runway: Runway; distanceKm: number; order: number };
+    const page = spatial
+      ? new RankedPage<Candidate>(
+          filters.limit,
+          offset,
+          (a, b) => a.distanceKm - b.distanceKm || a.order - b.order,
+        )
+      : undefined;
     let totalMatched = 0;
 
     for (const airport of this.airportsById.values()) {
@@ -579,6 +606,16 @@ export class AirportDataService {
 
       const runways = this.runwaysByAirportRef.get(airport.id);
       if (!runways) continue;
+      let distanceKm: number | null = null;
+      if (spatial) {
+        distanceKm = haversineKm(
+          spatial.latitude,
+          spatial.longitude,
+          airport.latitudeDeg,
+          airport.longitudeDeg,
+        );
+        if (distanceKm > spatial.radiusKm) continue;
+      }
 
       for (const runway of runways) {
         if (!filters.includeClosedRunways && runway.closed) continue;
@@ -593,13 +630,34 @@ export class AirportDataService {
           (runway.widthFt === undefined || runway.widthFt < filters.minWidthFt)
         )
           continue;
-        if (surface !== undefined && !runway.surface?.trim().toLowerCase().includes(surface))
-          continue;
-        totalMatched++;
-        if (matches.length < filters.limit) matches.push({ airport, runway });
+        if (fragments) {
+          const surface = runway.surface?.trim().toLowerCase();
+          if (surface === undefined || !fragments.some((fragment) => surface.includes(fragment)))
+            continue;
+        }
+        const order = totalMatched++;
+        if (page && distanceKm !== null) page.offer({ airport, runway, distanceKm, order });
+        else if (order >= offset && matches.length < filters.limit)
+          matches.push({ airport, runway, distanceKm: null, bearingDeg: null });
       }
     }
 
+    if (page && spatial) {
+      return {
+        matches: page.rows().map(({ airport, runway, distanceKm }) => ({
+          airport,
+          runway,
+          distanceKm,
+          bearingDeg: bearingDeg(
+            spatial.latitude,
+            spatial.longitude,
+            airport.latitudeDeg,
+            airport.longitudeDeg,
+          ),
+        })),
+        totalMatched,
+      };
+    }
     return { matches, totalMatched };
   }
 
@@ -616,6 +674,7 @@ export class AirportDataService {
     limit: number,
     type: string | undefined,
     includeClosed: boolean,
+    offset = 0,
   ): NearbyAirportsResult {
     const accept = (i: number): boolean => {
       const id = this.airportCoordIds[i];
@@ -626,7 +685,7 @@ export class AirportDataService {
       if (type && airport.type !== type) return false;
       return true;
     };
-    const { hits, total } = nearest(this.airportCoords, lat, lon, radiusKm, limit, accept);
+    const { hits, total } = nearest(this.airportCoords, lat, lon, radiusKm, limit, accept, offset);
     return {
       airports: hits.map((h) => {
         const airport = this.airportsById.get(this.airportCoordIds[h.index] as number) as Airport;
@@ -651,13 +710,14 @@ export class AirportDataService {
     radiusKm: number,
     limit: number,
     type: string | undefined,
+    offset = 0,
   ): NearbyNavaidsResult {
     const accept = (i: number): boolean => {
       if (!type) return true;
       const navaid = this.navaidList[i];
       return navaid?.type === type;
     };
-    const { hits, total } = nearest(this.navaidCoords, lat, lon, radiusKm, limit, accept);
+    const { hits, total } = nearest(this.navaidCoords, lat, lon, radiusKm, limit, accept, offset);
     return {
       navaids: hits.map((h) => {
         const navaid = this.navaidList[h.index] as Navaid;
@@ -677,10 +737,23 @@ export class AirportDataService {
    * list means the airport has no associated navaids (the tool distinguishes
    * this from "airport not found").
    */
-  navaidsForAirport(ident: string, type: string | undefined, limit: number): AirportNavaidsResult {
-    const all = this.navaidsByAirportIdent.get(ident.toUpperCase()) ?? [];
-    const filtered = type ? all.filter((n) => n.type === type) : all;
-    return { navaids: filtered.slice(0, limit), totalMatched: filtered.length };
+  navaidsForAirport(
+    ident: string,
+    type: string | undefined,
+    limit: number,
+    offset = 0,
+  ): AirportNavaidsResult {
+    return navaidPage(this.navaidsByAirportIdent.get(ident.toUpperCase()), type, limit, offset);
+  }
+
+  /** Page through the exact ident's holders in dataset order, after filtering by type. */
+  navaidsByIdent(
+    ident: string,
+    type: string | undefined,
+    limit: number,
+    offset = 0,
+  ): AirportNavaidsResult {
+    return navaidPage(this.navaidIdentIndex.get(ident.trim().toUpperCase()), type, limit, offset);
   }
 
   /**
@@ -728,6 +801,24 @@ export class AirportDataService {
   }
 }
 
+function navaidPage(
+  all: Navaid[] | undefined,
+  type: string | undefined,
+  limit: number,
+  offset: number,
+): AirportNavaidsResult {
+  if (!all) return { navaids: [], totalMatched: 0 };
+  if (!type) return { navaids: all.slice(offset, offset + limit), totalMatched: all.length };
+  const navaids: Navaid[] = [];
+  let totalMatched = 0;
+  for (const navaid of all) {
+    if (navaid.type !== type) continue;
+    const order = totalMatched++;
+    if (order >= offset && navaids.length < limit) navaids.push(navaid);
+  }
+  return { navaids, totalMatched };
+}
+
 /**
  * Token match allowing forward prefix hits: a query token matches an indexed
  * token it is a prefix of (so "intern" matches "international"). The reverse
@@ -741,6 +832,25 @@ function hasTokenPrefix(haystack: Set<string>, needle: string): boolean {
     if (t.startsWith(needle)) return true;
   }
   return false;
+}
+
+function matchesTextToken(haystack: Set<string>, needle: string): boolean {
+  if (hasTokenPrefix(haystack, needle)) return true;
+  const expanded = NAME_EXPANSIONS.get(needle);
+  return expanded !== undefined && haystack.has(expanded);
+}
+
+function expandedNameScore(name: string, queryTokens: string[]): number {
+  const tokens = tokenize(name);
+  const lastStart = tokens.length - queryTokens.length;
+  for (let i = 0; i <= lastStart; i++) {
+    const matches = queryTokens.every((query, j) => {
+      const token = tokens[i + j];
+      return token === query || token === NAME_EXPANSIONS.get(query);
+    });
+    if (matches) return lastStart === 0 ? 30 : 10;
+  }
+  return 0;
 }
 
 /**
@@ -758,14 +868,22 @@ const TYPE_RANK: Record<string, number> = {
   closed: 0,
 };
 
-function scoreAirport(airport: Airport, query: string | undefined): number {
+function scoreAirport(
+  airport: Airport,
+  query: string,
+  expandedNameTerms: string[] | undefined,
+): number {
   let score = (TYPE_RANK[airport.type] ?? 0) * 10;
   if (airport.scheduledService) score += 5;
   if (query) {
-    const q = query.trim().toUpperCase();
-    if (airport.iataCode?.toUpperCase() === q || airport.icaoCode?.toUpperCase() === q) score += 50;
-    if (airport.name.toUpperCase() === q) score += 30;
-    else if (airport.name.toUpperCase().includes(q)) score += 10;
+    if (airport.iataCode?.toUpperCase() === query || airport.icaoCode?.toUpperCase() === query)
+      score += 50;
+    const upperName = airport.name.toUpperCase();
+    if (upperName === query) score += 30;
+    else if (expandedNameTerms) {
+      const expanded = expandedNameScore(airport.name, expandedNameTerms);
+      score += upperName.includes(query) ? Math.max(10, expanded) : expanded;
+    } else if (upperName.includes(query)) score += 10;
   }
   return score;
 }

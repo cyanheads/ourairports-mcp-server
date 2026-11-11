@@ -10,18 +10,19 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
 import {
-  AirportSummarySchema,
+  AirportDetailSchema,
   buildResolutionNote,
   escapeMarkdown,
   FrequencySchema,
   numOrDash,
   RunwaySchema,
   renderAirportLines,
+  renderAirportLink,
   renderRunwayEnds,
   renderRunwayName,
   renderRunwaySpec,
   textOrDash,
-  toAirportSummary,
+  toAirportDetail,
   toFrequency,
   toRunway,
 } from './_schemas.js';
@@ -59,9 +60,7 @@ export const getAirportTool = tool('ourairports_get_airport', {
   }),
 
   output: z.object({
-    airport: AirportSummarySchema.describe(
-      'The resolved airport record. Codes the airport lacks are null.',
-    ),
+    airport: AirportDetailSchema,
     resolvedVia: z
       .string()
       .describe(
@@ -113,7 +112,7 @@ export const getAirportTool = tool('ourairports_get_airport', {
     if (wantFrequencies) included.push('frequencies');
 
     return {
-      airport: toAirportSummary(airport, country?.name, region?.name),
+      airport: toAirportDetail(airport, country?.name, region?.name),
       resolvedVia,
       resolutionNote,
       included,
@@ -126,6 +125,8 @@ export const getAirportTool = tool('ourairports_get_airport', {
     const lines = [
       `## ${escapeMarkdown(result.airport.name)}`,
       ...renderAirportLines(result.airport),
+      `**Wikipedia:** ${renderAirportLink(result.airport.wikipediaLink)}`,
+      `**Website:** ${renderAirportLink(result.airport.homeLink)}`,
     ];
     lines.push(`**Resolved via:** ${escapeMarkdown(result.resolvedVia)}`);
     lines.push(`**Resolution:** ${escapeMarkdown(result.resolutionNote)}`);

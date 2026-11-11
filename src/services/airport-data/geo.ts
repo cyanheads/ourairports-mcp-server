@@ -6,8 +6,13 @@
  * @module src/services/airport-data/geo
  */
 
+import { RankedPage } from './ranked-page.js';
+
 const EARTH_RADIUS_KM = 6371.0088;
 const DEG_TO_RAD = Math.PI / 180;
+
+/** Integer radius in kilometers large enough to include an antipodal point. */
+export const MAX_RADIUS_KM = Math.ceil(Math.PI * EARTH_RADIUS_KM);
 
 /** Great-circle distance in km between two lat/lon points (haversine). */
 export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -16,7 +21,8 @@ export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: numb
   const a =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1 * DEG_TO_RAD) * Math.cos(lat2 * DEG_TO_RAD) * Math.sin(dLon / 2) ** 2;
-  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const bounded = Math.min(1, a);
+  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(bounded), Math.sqrt(1 - bounded));
 }
 
 /** Initial bearing in degrees (0–360, clockwise from true north) from point 1 to point 2. */
@@ -45,10 +51,8 @@ export interface NearestResult {
 
 /**
  * Scan a flat `[lat, lon, lat, lon, …]` coordinate array, keep entries within
- * `radiusKm` that pass `accept(index)`, and return the nearest `limit` by
- * distance plus the pre-limit match count. Sorts only the surviving in-radius
- * set (typically small), not the whole corpus; the count is that set's length
- * before it is truncated in place, so it costs no allocation.
+ * `radiusKm` that pass `accept(index)` and return a distance-ranked page
+ * and the filtered total. Equal distances follow coordinate array order.
  */
 export function nearest(
   coords: Float64Array,
@@ -57,18 +61,24 @@ export function nearest(
   radiusKm: number,
   limit: number,
   accept: (index: number) => boolean,
+  offset = 0,
 ): NearestResult {
-  const hits: DistanceHit[] = [];
+  const page = new RankedPage<DistanceHit>(
+    limit,
+    offset,
+    (a, b) => a.distanceKm - b.distanceKm || a.index - b.index,
+  );
+  let total = 0;
   const count = coords.length / 2;
   for (let i = 0; i < count; i++) {
     if (!accept(i)) continue;
     const lat = coords[i * 2] as number;
     const lon = coords[i * 2 + 1] as number;
     const d = haversineKm(originLat, originLon, lat, lon);
-    if (d <= radiusKm) hits.push({ index: i, distanceKm: d });
+    if (d <= radiusKm) {
+      total++;
+      page.offer({ index: i, distanceKm: d });
+    }
   }
-  const total = hits.length;
-  hits.sort((a, b) => a.distanceKm - b.distanceKm);
-  if (total > limit) hits.length = limit;
-  return { hits, total };
+  return { hits: page.rows(), total };
 }

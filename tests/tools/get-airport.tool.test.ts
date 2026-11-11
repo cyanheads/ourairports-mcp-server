@@ -174,6 +174,60 @@ describe('getAirportTool', () => {
 });
 
 describe('getAirportTool content rendering', () => {
+  it('exposes airport keywords, detail links, and runway-end centers in both response surfaces', async () => {
+    const { text, structured } = await call('KSEA', ['runways']);
+    expect(structured.airport).toMatchObject({
+      keywords: 'Sea-Tac, SeaTac',
+      homeLink: 'https://www.portseattle.org/sea-tac',
+      wikipediaLink: 'https://en.wikipedia.org/wiki/Seattle%E2%80%93Tacoma_International_Airport',
+    });
+    expect(text).toContain('**Keywords:** Sea-Tac, SeaTac');
+    expect(text).toContain(
+      '[https://www.portseattle.org/sea-tac](<https://www.portseattle.org/sea-tac>)',
+    );
+    expect(text).toContain(
+      '(<https://en.wikipedia.org/wiki/Seattle%E2%80%93Tacoma_International_Airport>)',
+    );
+    expect(structured.runways[0]).toMatchObject({
+      leLatitudeDeg: 47.46383,
+      leLongitudeDeg: -122.30775,
+      leElevationFt: 432,
+      heLatitudeDeg: 47.43597,
+      heLongitudeDeg: -122.30744,
+      heElevationFt: 393,
+    });
+    expect(text).toContain(
+      'end centers (lat, lon, elevation MSL): 16L 47.46383°, -122.30775°, 432 ft / 34R 47.43597°, -122.30744°, 393 ft',
+    );
+  });
+
+  it('keeps recorded zero elevations distinct from missing geometry', async () => {
+    const closed = await call('CLOSEDX', ['runways']);
+    expect(closed.structured.runways[0]).toMatchObject({ leElevationFt: 0, heElevationFt: 0 });
+    expect(closed.text).toContain('18 47.505°, -122.405°, 0 ft / 36 47.495°, -122.395°, 0 ft');
+
+    const sparse = await call('CA-1094', ['runways']);
+    expect(sparse.structured.runways[0]).toMatchObject({
+      leLatitudeDeg: null,
+      leLongitudeDeg: null,
+      leElevationFt: null,
+      heLatitudeDeg: null,
+      heLongitudeDeg: null,
+      heElevationFt: null,
+    });
+    expect(sparse.text).toContain('end centers (lat, lon, elevation MSL): 06 —, —, — / 24 —, —, —');
+  });
+
+  it('renders missing links and keywords as null in structured output and dashes in text', async () => {
+    const { text, structured } = await call('00AA', []);
+    expect(structured.airport).toMatchObject({
+      keywords: null,
+      homeLink: null,
+      wikipediaLink: null,
+    });
+    expect(text).toContain('**Keywords:** —\n**Wikipedia:** —\n**Website:** —');
+  });
+
   it('renders plain upstream values byte-identically (00AA summary lines)', async () => {
     const { text } = await call('00AA');
     expect(text).toContain(

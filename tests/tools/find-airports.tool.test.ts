@@ -7,6 +7,7 @@
  */
 
 import type { z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
@@ -23,7 +24,11 @@ vi.mock('@/config/server-config.js', async (orig) => {
   const actual = await orig<typeof import('@/config/server-config.js')>();
   return {
     ...actual,
-    getServerConfig: () => ({ dataDir: undefined, defaultSearchLimit: cfg.defaultSearchLimit }),
+    getServerConfig: () => ({
+      dataDir: undefined,
+      defaultSearchLimit: cfg.defaultSearchLimit,
+      clampLimits: true,
+    }),
   };
 });
 
@@ -140,7 +145,7 @@ describe('findAirportsTool ranking and limit (characterization)', () => {
     );
     expect(getEnrichment(ctx)?.totalCount).toBe(0);
     expect(getEnrichment(ctx)?.notice).toBe(
-      'No airports within 50 km of 0, 0. Widen radius_km (max 500) or set include_closed and retry.',
+      'No airports within 50 km of 0, 0. Widen radius_km (max 20016). Set include_closed to include closed airports.',
     );
   });
 });
@@ -152,6 +157,7 @@ describe('findAirportsTool pre-limit totals and truncation disclosure (#11)', ()
     shown?: number;
     cap?: number;
     notice?: string;
+    nextOffset?: number;
   };
   /** Run through the public contract so content[] includes the enrichment trailer. */
   async function call(input: z.input<typeof findAirportsTool.input>) {
@@ -169,9 +175,7 @@ describe('findAirportsTool pre-limit totals and truncation disclosure (#11)', ()
     expect(structured.truncated).toBe(true);
     expect(structured.shown).toBe(1);
     expect(structured.cap).toBe(1);
-    expect(structured.notice).toBe(
-      'Results are nearest-first, so the omitted airports lie farther out. Narrow radius_km, add a type filter, or raise `limit` (max 50) to see more.',
-    );
+    expect(structured.notice).toBe('Use nextOffset as offset with the same query to continue.');
     expect(text).toContain('**2 total**');
     expect(text).toContain('**truncated:** true');
     expect(text).toContain(`> ${structured.notice}`);
@@ -221,6 +225,102 @@ describe('findAirportsTool pre-limit totals and truncation disclosure (#11)', ()
       .extend(findAirportsTool.enrichment!)
       .parse({ airports: [], totalCount: 5, truncated: true, shown: 1, cap: 1 });
     expect(parsed).toMatchObject({ totalCount: 5, truncated: true, shown: 1, cap: 1 });
+  });
+
+  it('returns a continuation, final page, and past-end notice on both surfaces', async () => {
+    const first = await call({ ...SEA, limit: 1, offset: 0 });
+    expect(first.structured).toMatchObject({
+      airports: [{ airport: { ident: 'KSEA' } }],
+      totalCount: 2,
+      nextOffset: 1,
+      truncated: true,
+      shown: 1,
+      cap: 1,
+    });
+    expect(first.text).toContain('**nextOffset:** 1');
+    const last = await call({ ...SEA, limit: 1, offset: 1 });
+    expect(last.structured).toMatchObject({
+      airports: [{ airport: { ident: 'KBFI' } }],
+      totalCount: 2,
+    });
+    expect(last.structured).not.toHaveProperty('nextOffset');
+    expect(last.structured).not.toHaveProperty('truncated');
+    expect(last.text).toContain('KBFI');
+    const past = await call({ ...SEA, limit: 1, offset: 2 });
+    expect(past.structured).toMatchObject({
+      airports: [],
+      totalCount: 2,
+      notice: expect.stringContaining('Offset 2'),
+    });
+    expect(past.structured).not.toHaveProperty('nextOffset');
+    expect(past.text).toContain('Offset 2');
+  });
+
+  it('accepts the globe radius with filtered totals and drops impossible widen guidance', async () => {
+    const globe = await call({ ...SEA, radius_km: 20016, type: 'large_airport', limit: 1 });
+    expect(globe.structured).toMatchObject({
+      airports: [{ airport: { ident: 'KSEA' } }],
+      totalCount: 4,
+      nextOffset: 1,
+    });
+    expect(globe.text).toContain('**4 total**');
+    const empty = await call({
+      ...SEA,
+      radius_km: 20016,
+      type: 'balloonport',
+      include_closed: true,
+    });
+    expect(empty.structured).toMatchObject({
+      airports: [],
+      totalCount: 0,
+      notice: expect.stringContaining('Drop the type filter'),
+    });
+    expect(empty.structured.notice).not.toContain('Widen');
+    expect(empty.text).toContain('Drop the type filter');
+  });
+
+  it.each([{ offset: 0.5 }, { radius_km: 20017 }])(
+    'rejects invalid paging or radius input %j',
+    async (input) => {
+      const result = await runToolContract(findAirportsTool, { ...SEA, ...input });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+      expect(JSON.stringify(result.content)).toContain(Object.keys(input)[0]);
+    },
+  );
+
+  it('passes the clamped limit to the service and preserves continuation guidance', async () => {
+    const [hit] = svc.nearbyAirports(
+      SEA.latitude,
+      SEA.longitude,
+      100,
+      1,
+      undefined,
+      false,
+    ).airports;
+    expect(hit).toBeDefined();
+    const spy = vi.spyOn(svc, 'nearbyAirports').mockReturnValueOnce({
+      airports: Array.from({ length: 50 }, (_, id) => ({
+        ...hit!,
+        airport: { ...hit!.airport, id },
+      })),
+      totalMatched: 51,
+    });
+    try {
+      const { structured, text } = await call({ ...SEA, limit: 51 });
+      expect(spy.mock.calls[0]?.[3]).toBe(50);
+      expect(structured).toMatchObject({
+        cap: 50,
+        nextOffset: 50,
+        notice:
+          'Requested limit 51 was clamped to 50. Use nextOffset as offset with the same query to continue.',
+      });
+      expect(text).toContain('clamped to 50. Use nextOffset');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

@@ -26,7 +26,11 @@ vi.mock('@/config/server-config.js', async (orig) => {
   const actual = await orig<typeof import('@/config/server-config.js')>();
   return {
     ...actual,
-    getServerConfig: () => ({ dataDir: undefined, defaultSearchLimit: cfg.defaultSearchLimit }),
+    getServerConfig: () => ({
+      dataDir: undefined,
+      defaultSearchLimit: cfg.defaultSearchLimit,
+      clampLimits: true,
+    }),
   };
 });
 
@@ -287,7 +291,7 @@ describe('findNavaidsTool content and shared-code disclosure', () => {
       'Resolved via ident. "GIG" is also a code of 1 other airport: SBGL (BR, iata_code). ident outranks iata_code (resolution priority: ident, icao_code, iata_code, gps_code, local_code). To fetch that airport, pass its ident.',
     );
     expect(structured.notice).toMatch(/was found but has no associated navaids/);
-    expect(text).toContain(`**Resolution:** ${structured.resolutionNote}`);
+    expect(text).toContain(`**Resolution:** \`${structured.resolutionNote}\``);
     expect(text).toMatch(/> Airport GIG was found but has no associated navaids/);
     expect(structured.notice).not.toContain('Black Diamond');
     expect(structured.truncated).toBeUndefined();
@@ -306,6 +310,7 @@ type NavaidStructured = Awaited<ReturnType<typeof findNavaidsTool.handler>> & {
   truncated?: boolean;
   shown?: number;
   cap?: number;
+  nextOffset?: number;
   notice?: string;
   resolutionNote?: string;
 };
@@ -329,7 +334,7 @@ describe('findNavaidsTool pre-limit totals and truncation disclosure (#11)', () 
     expect(structured.shown).toBe(1);
     expect(structured.cap).toBe(1);
     expect(structured.notice).toBe(
-      'Results are nearest-first, so the omitted navaids lie farther out. Narrow radius_km, add a type filter, or raise `limit` (max 50) to see more.',
+      'Continue with offset 1 (nextOffset) and the same query to read more navaids.',
     );
     expect(text).toContain('**4 total**');
     expect(text).toContain('**truncated:** true');
@@ -366,7 +371,7 @@ describe('findNavaidsTool pre-limit totals and truncation disclosure (#11)', () 
     const { structured } = await callNavaids({ latitude: 0, longitude: 0, radius_km: 10 });
     expect(structured.totalCount).toBe(0);
     expect(structured.notice).toBe(
-      'No navaids within 10 km of 0, 0. Widen radius_km (max 500) and retry.',
+      'No navaids within 10 km of 0, 0. Widen radius_km (max 20016) and retry.',
     );
     expect(structured.truncated).toBeUndefined();
     expect(structured.shown).toBeUndefined();
@@ -380,7 +385,7 @@ describe('findNavaidsTool pre-limit totals and truncation disclosure (#11)', () 
     expect(structured.shown).toBe(1);
     expect(structured.cap).toBe(1);
     expect(structured.notice).toBe(
-      'KJFK has 2 associated navaids; add a type filter or raise `limit` (max 50) to see the rest.',
+      'Continue with offset 1 (nextOffset) and the same query to read more navaids.',
     );
     expect(structured.resolutionNote).toBeUndefined();
     expect(text).toContain('**2 total**');
@@ -408,11 +413,13 @@ describe('findNavaidsTool pre-limit totals and truncation disclosure (#11)', () 
     expect(structured.airportIdent).toBe('LELN');
     expect(structured.totalCount).toBe(2);
     expect(structured.truncated).toBe(true);
-    expect(structured.notice).toMatch(/^LELN has 2 associated navaids/);
+    expect(structured.notice).toBe(
+      'Continue with offset 1 (nextOffset) and the same query to read more navaids.',
+    );
     expect(structured.resolutionNote).toBe(
       'Resolved via iata_code. "LEN" is also a code of 1 other airport: AR-0062 (AR, local_code). iata_code outranks local_code (resolution priority: ident, icao_code, iata_code, gps_code, local_code). To fetch that airport, pass its ident.',
     );
-    expect(text).toContain(`**Resolution:** ${structured.resolutionNote}`);
+    expect(text).toContain(`**Resolution:** \`${structured.resolutionNote}\``);
     expect(text).toContain(`> ${structured.notice}`);
   });
 

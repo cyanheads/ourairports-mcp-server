@@ -5,6 +5,7 @@
  * @module tests/tools/search-airports.tool.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import {
   createMockContext as createBaseContext,
   getEnrichment,
@@ -88,6 +89,30 @@ describe('searchAirportsTool', () => {
     expect(getEnrichment(ctx)?.notice).toMatch(/No airports matched/);
   });
 
+  it('suggests an exact-code lookup on both response surfaces when a query has no matches', async () => {
+    const result = await runToolContract(searchAirportsTool, { query: 'ZZZX' });
+    expect(result.structuredContent).toMatchObject({
+      airports: [],
+      totalCount: 0,
+      notice: expect.stringContaining('ourairports_get_airport'),
+    });
+    expect(JSON.stringify(result.content)).toContain('ourairports_get_airport');
+  });
+
+  it('keeps a multiline query literal in the notice on both response surfaces', async () => {
+    const query = 'ZZZX\r\n- [lookup](https://example.com)';
+    const result = await runToolContract(searchAirportsTool, { query });
+    expect(result.structuredContent).toMatchObject({
+      airports: [],
+      notice: expect.stringContaining(query),
+    });
+    const text = result.content
+      .flatMap((block) => (block.type === 'text' ? [block.text] : []))
+      .join('\n');
+    expect(text).toContain('ZZZX&#13;');
+    expect(text).toContain('\n> \\- \\[lookup\\](https://example.com)');
+  });
+
   // #1: a gibberish query no longer false-matches via a short indexed token.
   it('returns zero for a gibberish query that shares a leading letter with a short token', async () => {
     const ctx = createMockContext();
@@ -164,7 +189,97 @@ describe('searchAirportsTool', () => {
   });
 });
 
+describe('searchAirportsTool paging', () => {
+  it('advances by returned rows and keeps the complete match count', async () => {
+    const first = await runToolContract(searchAirportsTool, { query: 'seattle', limit: 1 });
+    expect(first.structuredContent).toMatchObject({
+      airports: [{ ident: 'KSEA' }],
+      totalCount: 2,
+      nextOffset: 1,
+      truncated: true,
+      shown: 1,
+      cap: 1,
+    });
+    expect(first.content.map((block) => 'text' in block && block.text).join('\n')).toContain(
+      '**nextOffset:** 1',
+    );
+    const last = await runToolContract(searchAirportsTool, {
+      query: 'seattle',
+      limit: 1,
+      offset: 1,
+    });
+    expect(last.structuredContent).toMatchObject({
+      airports: [{ ident: 'KBFI' }],
+      totalCount: 2,
+    });
+    expect(last.structuredContent).not.toHaveProperty('nextOffset');
+    expect(last.structuredContent).not.toHaveProperty('truncated');
+    expect(JSON.stringify(last.content)).toContain('KBFI');
+    const past = await runToolContract(searchAirportsTool, {
+      query: 'seattle',
+      limit: 1,
+      offset: 2,
+    });
+    expect(past.structuredContent).toMatchObject({
+      airports: [],
+      totalCount: 2,
+      notice: expect.stringContaining('Offset 2'),
+    });
+    expect(past.structuredContent).not.toHaveProperty('nextOffset');
+    expect(JSON.stringify(past.content)).toContain('Offset 2');
+  });
+
+  it('rejects a negative offset on both response surfaces', async () => {
+    const result = await runToolContract(searchAirportsTool, { offset: -1 });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(JSON.stringify(result.content)).toContain('offset');
+  });
+
+  it('composes clamp and continuation notices on both response surfaces', async () => {
+    const [airport] = svc.search({ includeClosed: false, limit: 1 }).airports;
+    expect(airport).toBeDefined();
+    const spy = vi.spyOn(svc, 'search').mockReturnValueOnce({
+      airports: Array.from({ length: 100 }, (_, id) => ({ ...airport!, id })),
+      totalMatched: 101,
+    });
+    try {
+      const result = await runToolContract(searchAirportsTool, { limit: 101 });
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }));
+      expect(result.structuredContent).toMatchObject({
+        cap: 100,
+        nextOffset: 100,
+        notice:
+          'Requested limit 101 was clamped to 100. Use nextOffset as offset with the same query to continue.',
+      });
+      expect(JSON.stringify(result.content)).toContain('clamped to 100. Use nextOffset');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('searchAirportsTool content rendering', () => {
+  it.each([
+    ['jfk', 'KJFK', 'John F Kennedy International Airport'],
+    ['seattle tacoma intl', 'KSEA', 'Seattle Tacoma International Airport'],
+  ])('renders the leading match for %s', async (query, ident, name) => {
+    const result = await runToolContract(searchAirportsTool, { query, limit: 1 });
+    expect(result.structuredContent).toMatchObject({ airports: [{ ident, name }] });
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining(name) });
+  });
+
+  it('keeps forward prefix matches for airport text', async () => {
+    const result = await runToolContract(searchAirportsTool, { query: 'seatt', limit: 2 });
+    expect(result.structuredContent).toMatchObject({
+      airports: [{ ident: 'KSEA' }, { ident: 'KBFI' }],
+      totalCount: 2,
+    });
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining('Seattle Tacoma') });
+  });
+
   it('renders every coordinate as the exact structuredContent number (KSEA 47.449001, -122.308998)', async () => {
     const result = await runToolContract(searchAirportsTool, { query: 'Seattle' });
     const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');

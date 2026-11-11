@@ -7,7 +7,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { escapeMarkdown, renderRunwayName } from '@/mcp-server/tools/definitions/_schemas.js';
+import {
+  escapeMarkdown,
+  renderAirportLines,
+  renderAirportLink,
+  renderRunwayName,
+  toAirportSummary,
+} from '@/mcp-server/tools/definitions/_schemas.js';
 
 describe('escapeMarkdown (inline)', () => {
   it.each([
@@ -151,4 +157,98 @@ describe('escapeMarkdown running time', () => {
       expect(t80k).toBeLessThan(250);
     },
   );
+});
+
+const summary = toAirportSummary(
+  {
+    id: 1,
+    ident: 'TEST',
+    name: 'Test Airport',
+    type: 'small_airport',
+    latitudeDeg: 0,
+    longitudeDeg: 0,
+    scheduledService: false,
+  },
+  undefined,
+  undefined,
+);
+
+const renderKeywords = (keywords: string) => renderAirportLines({ ...summary, keywords }).at(-1);
+
+describe('recorded airport text', () => {
+  it('keeps CRLF, blank lines, and Markdown-looking keyword text', () => {
+    expect(renderKeywords('Alias &copy;\r\n\n> [code](other) *name* <b>')).toBe(
+      '**Keywords:** Alias \\&copy;&#13;\\\n\\\n\\> \\[code\\](other) \\*name\\* \\<b>',
+    );
+  });
+
+  it('keeps parentheses and literal entities in the URL label and destination', () => {
+    expect(renderAirportLink('https://example.com/A_(B)?q=&copy;&v=1')).toBe(
+      '[https://example.com/A\\_(B)?q=\\&copy;&v=1](<https://example.com/A_(B)?q=\\&copy;&v=1>)',
+    );
+  });
+
+  it.each([
+    ['hhttps://example.com/', 'hhttps://example.com/'],
+    ['https:/example.com/', 'https:/example.com/'],
+    ['https://example.com/  [Korean]', 'https://example.com/  \\[Korean\\]'],
+    ['javascript:alert(1)', 'javascript:alert(1)'],
+    ['<https://example.com/>', '\\<https://example.com/>'],
+  ])('renders malformed or non-web link %j as literal text', (value, literal) => {
+    expect(renderAirportLink(value)).toBe(literal);
+  });
+});
+
+describe('recorded airport text CPU scaling', () => {
+  const cases = [
+    {
+      name: 'nested openers',
+      render: renderKeywords,
+      build: (n: number) => '<a'.repeat(n / 2),
+      max: 80_000,
+    },
+    {
+      name: 'long line ending in a break',
+      render: renderKeywords,
+      build: (n: number) => `${'§1 x'.repeat(n / 4)}\ny`,
+      max: 80_000,
+    },
+    {
+      name: 'CRLF throughout',
+      render: renderKeywords,
+      build: (n: number) => '  \r\n'.repeat(n / 4),
+      max: 80_000,
+    },
+    {
+      name: 'valid link with a digit run',
+      render: renderAirportLink,
+      build: (n: number) => `https://example.com/${'1'.repeat(n)}`,
+      max: 320_000,
+    },
+  ];
+
+  function cpuMicros(render: (input: string) => unknown, input: string, calls: number) {
+    const start = process.threadCpuUsage();
+    for (let run = 0; run < calls; run++) render(input);
+    const elapsed = process.threadCpuUsage(start);
+    return (elapsed.user + elapsed.system) / calls;
+  }
+
+  it.each(cases)('bounds CPU growth on $name', ({ render, build, max }) => {
+    const baseline = build(5_000);
+    render(baseline);
+    for (let size = 10_000; size <= max; size *= 2) {
+      const input = build(size);
+      let bestGrowth = Infinity;
+      let bestTime = Infinity;
+      for (let run = 0; run < 5; run++) {
+        const small = cpuMicros(render, baseline, 10);
+        const large = cpuMicros(render, input, 1);
+        bestGrowth = Math.min(bestGrowth, large / Math.max(small, 1));
+        bestTime = Math.min(bestTime, large);
+      }
+      expect(bestGrowth).toBeLessThan(256);
+      expect(bestTime).toBeLessThan(200_000);
+    }
+  });
 });

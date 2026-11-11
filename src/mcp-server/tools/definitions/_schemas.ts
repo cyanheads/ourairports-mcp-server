@@ -12,6 +12,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
+import { escapeMarkdownInline, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { COUNTRY_CODE_PATTERN, REGION_CODE_PATTERN } from '@/services/airport-data/facet-codes.js';
 import type {
   Airport,
@@ -101,8 +102,18 @@ export const AirportSummarySchema = z
       .describe('3-letter IATA code, or null when the airport has none (~89% of fields).'),
     gpsCode: z.string().nullable().describe('GPS code, or null.'),
     localCode: z.string().nullable().describe('National/local code (e.g. FAA LID), or null.'),
+    keywords: z
+      .string()
+      .nullable()
+      .describe('Recorded aliases and other search keywords, or null.'),
   })
   .describe('An airport summary with its full (sparse) code set and coordinates.');
+
+/** Airport details shared by the detail tool and the airport resource. */
+export const AirportDetailSchema = AirportSummarySchema.extend({
+  wikipediaLink: z.string().nullable().describe('Recorded Wikipedia link, or null.'),
+  homeLink: z.string().nullable().describe('Recorded airport website link, or null.'),
+}).describe('The resolved airport record, including its recorded links. Missing fields are null.');
 
 export const RunwaySchema = z
   .object({
@@ -121,6 +132,18 @@ export const RunwaySchema = z
     lighted: z.boolean().describe('True when the runway is lighted.'),
     closed: z.boolean().describe('True when the runway is closed.'),
     leIdent: z.string().nullable().describe('Low-end runway designator (e.g. 16L), or null.'),
+    leLatitudeDeg: z
+      .number()
+      .nullable()
+      .describe('Latitude at the low-end center in decimal degrees (WGS84), or null.'),
+    leLongitudeDeg: z
+      .number()
+      .nullable()
+      .describe('Longitude at the low-end center in decimal degrees (WGS84), or null.'),
+    leElevationFt: z
+      .number()
+      .nullable()
+      .describe('Elevation at the low-end center in feet above mean sea level, or null.'),
     leHeadingDegT: z.number().nullable().describe('Low-end true heading in degrees, or null.'),
     leDisplacedThresholdFt: z
       .number()
@@ -129,6 +152,18 @@ export const RunwaySchema = z
         'Length of the displaced threshold at the low end (leIdent) in feet — part of lengthFt. Null when none is recorded.',
       ),
     heIdent: z.string().nullable().describe('High-end runway designator (e.g. 34R), or null.'),
+    heLatitudeDeg: z
+      .number()
+      .nullable()
+      .describe('Latitude at the high-end center in decimal degrees (WGS84), or null.'),
+    heLongitudeDeg: z
+      .number()
+      .nullable()
+      .describe('Longitude at the high-end center in decimal degrees (WGS84), or null.'),
+    heElevationFt: z
+      .number()
+      .nullable()
+      .describe('Elevation at the high-end center in feet above mean sea level, or null.'),
     heHeadingDegT: z.number().nullable().describe('High-end true heading in degrees, or null.'),
     heDisplacedThresholdFt: z
       .number()
@@ -138,7 +173,7 @@ export const RunwaySchema = z
       ),
   })
   .describe(
-    'A runway with full-surface dimensions, surface, lighting, and per-end designators, headings, and displaced thresholds.',
+    'A runway with full-surface dimensions, surface, lighting, and per-end designators, center positions and elevations, headings, and displaced thresholds.',
   );
 
 export const FrequencySchema = z
@@ -244,6 +279,20 @@ export function toAirportSummary(
     iataCode: a.iataCode ?? null,
     gpsCode: a.gpsCode ?? null,
     localCode: a.localCode ?? null,
+    keywords: a.keywords ?? null,
+  };
+}
+
+/** Add the recorded links to the shared airport summary. */
+export function toAirportDetail(
+  airport: Airport,
+  countryName: string | undefined,
+  regionName: string | undefined,
+): z.infer<typeof AirportDetailSchema> {
+  return {
+    ...toAirportSummary(airport, countryName, regionName),
+    wikipediaLink: airport.wikipediaLink ?? null,
+    homeLink: airport.homeLink ?? null,
   };
 }
 
@@ -256,9 +305,15 @@ export function toRunway(r: Runway): z.infer<typeof RunwaySchema> {
     lighted: r.lighted,
     closed: r.closed,
     leIdent: r.leIdent ?? null,
+    leLatitudeDeg: r.leLatitudeDeg ?? null,
+    leLongitudeDeg: r.leLongitudeDeg ?? null,
+    leElevationFt: r.leElevationFt ?? null,
     leHeadingDegT: r.leHeadingDegT ?? null,
     leDisplacedThresholdFt: r.leDisplacedThresholdFt ?? null,
     heIdent: r.heIdent ?? null,
+    heLatitudeDeg: r.heLatitudeDeg ?? null,
+    heLongitudeDeg: r.heLongitudeDeg ?? null,
+    heElevationFt: r.heElevationFt ?? null,
     heHeadingDegT: r.heHeadingDegT ?? null,
     heDisplacedThresholdFt: r.heDisplacedThresholdFt ?? null,
   };
@@ -304,9 +359,8 @@ export function toNavaid(n: Navaid): z.infer<typeof NavaidSchema> {
 // ---- content[] rendering ---------------------------------------------------
 
 const MARKDOWN_METACHAR = /[\\`*~_<\]&#\r\n]/;
-/** A letter or digit ending / starting the slice — code-point aware, so astral letters count. */
-const WORD_CHAR_BEFORE = /[\p{L}\p{N}]$/u;
-const WORD_CHAR_AFTER = /^[\p{L}\p{N}]/u;
+/** A letter or digit starting the slice, including astral code points. */
+const WORD_CHAR = /^[\p{L}\p{N}]/u;
 /** A CommonMark entity or numeric character reference starting at `lastIndex` (bounded length). */
 const ENTITY_REFERENCE = /&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{0,31});/y;
 /** A block marker that would open a list, quote, heading, task box, or footnote at a line start. */
@@ -315,8 +369,8 @@ const LEADING_BLOCK_MARKER =
 
 /** True when the `_` at index `i` sits between two letters/digits (intraword). */
 const isIntraword = (s: string, i: number): boolean =>
-  WORD_CHAR_BEFORE.test(s.slice(Math.max(0, i - 2), i)) &&
-  WORD_CHAR_AFTER.test(s.slice(i + 1, i + 3));
+  WORD_CHAR.test([...s.slice(Math.max(0, i - 2), i)].at(-1) ?? '') &&
+  WORD_CHAR.test(s.slice(i + 1, i + 3));
 
 /**
  * Escape upstream text for interpolation into content[] Markdown, so it renders
@@ -403,6 +457,25 @@ export const numOrDash = (v: number | null): string => (v == null ? '—' : Stri
 /** Render upstream text escaped for Markdown, or a dash when null. */
 export const textOrDash = (v: string | null): string => (v == null ? '—' : escapeMarkdown(v));
 
+/** Escape the literal value, preserving carriage returns that CommonMark normalizes in source. */
+export function renderRecordedText(value: string): string {
+  return value.split('\r').map(escapeMarkdownInline).join('&#13;');
+}
+
+/** Keep every escaped line of a notice inside its Markdown block quote. */
+export function renderNotice(value: string): string {
+  return `> ${renderRecordedText(value).replaceAll('\n', '\n> ')}`;
+}
+
+/** Use the recorded URL as the visible label and destination when it is a usable web URL. */
+export function renderAirportLink(value: string | null): string {
+  if (value === null) return '—';
+  if (!/^https?:\/\/[^/]/i.test(value) || /[\s\\<>]/u.test(value) || !URL.canParse(value)) {
+    return renderRecordedText(value);
+  }
+  return markdownLink(value, value);
+}
+
 /**
  * Shared markdown renderer for an airport summary block. Renders EVERY field of
  * AirportSummarySchema (format-parity is lint-enforced — each output field must
@@ -416,13 +489,14 @@ export function renderAirportLines(a: z.infer<typeof AirportSummarySchema>): str
     `**Codes:** IATA ${textOrDash(a.iataCode)} · ICAO ${textOrDash(a.icaoCode)} · GPS ${textOrDash(a.gpsCode)} · Local ${textOrDash(a.localCode)}`,
     `**Location:** ${a.latitudeDeg}, ${a.longitudeDeg} · elevation ${numOrDash(a.elevationFt)} ft · continent ${textOrDash(a.continent)}`,
     `**Place:** ${textOrDash(a.municipality)}, region ${textOrDash(a.regionName)} (${textOrDash(a.isoRegion)}), country ${textOrDash(a.countryName)} (${textOrDash(a.isoCountry)})`,
+    `**Keywords:** ${a.keywords === null ? '—' : renderRecordedText(a.keywords)}`,
   ];
 }
 
 type RunwayOutput = z.infer<typeof RunwaySchema>;
 
 /** The runway's end designators (`16L/34R`), escaped, or `unnamed`. */
-export function renderRunwayName(r: RunwayOutput): string {
+export function renderRunwayName(r: Pick<RunwayOutput, 'leIdent' | 'heIdent'>): string {
   const ends = [r.leIdent, r.heIdent].filter((e): e is string => Boolean(e));
   return ends.length > 0 ? ends.map((e) => escapeMarkdown(e)).join('/') : 'unnamed';
 }
@@ -432,12 +506,13 @@ export function renderRunwaySpec(r: RunwayOutput): string {
   return `(id ${r.id}) — length ${numOrDash(r.lengthFt)} ft × width ${numOrDash(r.widthFt)} ft | surface: ${textOrDash(r.surface)} | lighted: ${r.lighted ? 'yes' : 'no'} | closed: ${r.closed ? 'yes' : 'no'}`;
 }
 
-/** Per-end headings and displaced thresholds, each next to its end designator. */
+/** Per-end headings, displaced thresholds, and centers next to their designators. */
 export function renderRunwayEnds(r: RunwayOutput): string {
-  const threshold = (ft: number | null) => (ft == null ? '—' : `${ft} ft`);
+  const feet = (ft: number | null) => (ft == null ? '—' : `${ft} ft`);
+  const degrees = (deg: number | null) => (deg == null ? '—' : `${deg}°`);
   const le = textOrDash(r.leIdent);
   const he = textOrDash(r.heIdent);
-  return `headings (true): ${le} ${numOrDash(r.leHeadingDegT)}° / ${he} ${numOrDash(r.heHeadingDegT)}° | displaced threshold: ${le} ${threshold(r.leDisplacedThresholdFt)} / ${he} ${threshold(r.heDisplacedThresholdFt)}`;
+  return `headings (true): ${le} ${numOrDash(r.leHeadingDegT)}° / ${he} ${numOrDash(r.heHeadingDegT)}° | displaced threshold: ${le} ${feet(r.leDisplacedThresholdFt)} / ${he} ${feet(r.heDisplacedThresholdFt)} | end centers (lat, lon, elevation MSL): ${le} ${degrees(r.leLatitudeDeg)}, ${degrees(r.leLongitudeDeg)}, ${feet(r.leElevationFt)} / ${he} ${degrees(r.heLatitudeDeg)}, ${degrees(r.heLongitudeDeg)}, ${feet(r.heElevationFt)}`;
 }
 
 type NavaidOutput = z.infer<typeof NavaidSchema>;

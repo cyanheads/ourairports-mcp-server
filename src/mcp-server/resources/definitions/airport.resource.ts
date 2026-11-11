@@ -12,11 +12,11 @@
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import {
-  AirportSummarySchema,
+  AirportDetailSchema,
   buildResolutionNote,
   FrequencySchema,
   RunwaySchema,
-  toAirportSummary,
+  toAirportDetail,
   toFrequency,
   toRunway,
 } from '@/mcp-server/tools/definitions/_schemas.js';
@@ -51,9 +51,7 @@ export const airportResource = resource('airport://{code}', {
   }),
 
   output: z.object({
-    airport: AirportSummarySchema.describe(
-      'The resolved airport record. Codes the airport lacks are null.',
-    ),
+    airport: AirportDetailSchema,
     resolvedVia: z
       .string()
       .describe(
@@ -86,7 +84,7 @@ export const airportResource = resource('airport://{code}', {
     const region = svc.region(airport.isoRegion);
 
     return {
-      airport: toAirportSummary(airport, country?.name, region?.name),
+      airport: toAirportDetail(airport, country?.name, region?.name),
       resolvedVia,
       resolutionNote: buildResolutionNote(params.code, resolution),
       runways: svc.runwaysForAirport(airport.id).map(toRunway),

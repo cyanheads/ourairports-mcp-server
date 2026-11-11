@@ -24,6 +24,7 @@ await createApp({
   },
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
+  skills: 'skills',
   prompts: [],
   instructions:
     'Static, offline aviation reference data (airports, runways, navaids, radio frequencies) from the public-domain OurAirports dataset — no API key, no rate limit, no upstream. Resolve any airport by a single `code` (IATA/ICAO/GPS/local/ident) with ourairports_get_airport; the `airport://{code}` resource mirrors it. Search by name or facets with ourairports_search_airports (closed airports excluded by default). Ground a coordinate in the nearest airports with ourairports_find_airports (no geocoding — resolve place names to lat/lon upstream first). Navaid frequencies are stored in kHz for every type; airport frequencies are in MHz. The data is community-edited and as fresh as the last build — not authoritative for real flight operations.',

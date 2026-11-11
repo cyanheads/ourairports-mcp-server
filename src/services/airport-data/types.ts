@@ -205,7 +205,7 @@ export interface NearbyNavaidsResult {
   totalMatched: number;
 }
 
-/** Navaids associated with an airport (capped) plus the type-filtered total. */
+/** A page of navaids for an airport or ident plus the type-filtered total. */
 export interface AirportNavaidsResult {
   navaids: Navaid[];
   totalMatched: number;
@@ -216,6 +216,7 @@ export interface SearchFilters {
   country?: string;
   includeClosed: boolean;
   limit: number;
+  offset?: number;
   query?: string;
   region?: string;
   type?: string;
@@ -251,14 +252,18 @@ export interface RunwaySearchFilters {
   limit: number;
   minLengthFt?: number;
   minWidthFt?: number;
+  offset?: number;
   region?: string;
-  surface?: string;
+  spatial?: { latitude: number; longitude: number; radiusKm: number };
+  surface?: string | readonly string[];
   type?: string;
 }
 
 /** A matched runway paired with its airport — one flat join row per runway. */
 export interface RunwayMatch {
   airport: Airport;
+  bearingDeg: number | null;
+  distanceKm: number | null;
   runway: Runway;
 }
 

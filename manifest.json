@@ -19,6 +19,7 @@
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_AUTH_MODE": "none",
+        "OURAIRPORTS_CLAMP_LIMITS": "${user_config.OURAIRPORTS_CLAMP_LIMITS}",
         "NODE_ENV": "production"
       }
     }
@@ -28,5 +29,13 @@
   },
   "tools_generated": true,
   "prompts_generated": true,
-  "user_config": {}
+  "user_config": {
+    "OURAIRPORTS_CLAMP_LIMITS": {
+      "type": "boolean",
+      "title": "Clamp oversized limits",
+      "description": "Clamp explicit limits above each tool's page ceiling. Disable for strict rejection.",
+      "default": true,
+      "required": false
+    }
+  }
 }

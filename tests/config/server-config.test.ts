@@ -12,6 +12,23 @@ afterEach(() => {
 });
 
 describe('getServerConfig', () => {
+  it.each([
+    [undefined, true],
+    ['', true],
+    ['true', true],
+    ['false', false],
+  ])('parses clamp policy %j as %j', async (value, expected) => {
+    vi.stubEnv('OURAIRPORTS_CLAMP_LIMITS', value);
+    const { getServerConfig } = await import('@/config/server-config.js');
+    expect(getServerConfig().clampLimits).toBe(expected);
+  });
+
+  it('rejects an invalid clamp policy with the env name', async () => {
+    vi.stubEnv('OURAIRPORTS_CLAMP_LIMITS', 'sometimes');
+    const { getServerConfig } = await import('@/config/server-config.js');
+    expect(() => getServerConfig()).toThrow('OURAIRPORTS_CLAMP_LIMITS');
+  });
+
   it.each(['', `\${user_config.OURAIRPORTS_DATA_DIR}`])(
     'treats %j as an unset optional data directory',
     async (value) => {
