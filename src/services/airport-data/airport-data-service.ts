@@ -22,8 +22,10 @@ import { bool, compact, forEachRow, int, num, positiveInt, reqInt, reqStr, str }
 import { resolveBundledDataDir } from './data-dir.js';
 import { bearingDeg, haversineKm, nearest } from './geo.js';
 import { RankedPage } from './ranked-page.js';
+import { readSnapshot, type Snapshot } from './snapshot.js';
 import type {
   Airport,
+  AirportFacets,
   AirportNavaidsResult,
   CodeHolder,
   CodeResolution,
@@ -70,14 +72,50 @@ const CODE_PRIORITY: readonly { via: ResolvedVia; key: keyof Airport }[] = [
 ] as const;
 
 const STOPWORD = new Set(['the', 'of', 'and', 'a', 'an']);
-const NAME_EXPANSIONS = new Map([
+/**
+ * Query-token alternatives. Each adds one exact indexed form beside the literal
+ * token, which keeps its forward-prefix match, so an alternative never removes
+ * a match. `st`/`saint` and `ste`/`sainte` run both ways because the corpus
+ * spells both forms.
+ */
+const NAME_ALTERNATIVES = new Map([
   ['intl', 'international'],
   ['rgnl', 'regional'],
   ['muni', 'municipal'],
   ['fld', 'field'],
   ['mem', 'memorial'],
+  ['ft', 'fort'],
+  ['mt', 'mount'],
+  ['st', 'saint'],
+  ['saint', 'st'],
+  ['ste', 'sainte'],
+  ['sainte', 'ste'],
+]);
+/** Latin letters NFKD leaves whole, folded to ASCII so they stay inside their word. */
+const LATIN_FOLD = new Map([
+  ['æ', 'ae'],
+  ['đ', 'd'],
+  ['ð', 'd'],
+  ['ħ', 'h'],
+  ['ı', 'i'],
+  ['ł', 'l'],
+  ['ø', 'o'],
+  ['œ', 'oe'],
+  ['ß', 'ss'],
+  ['þ', 'th'],
+  ['ŧ', 't'],
+  ['ə', 'e'],
+  ['ᵫ', 'ue'],
 ]);
 
+/** One airport's search text: every indexed token, plus name and municipality in order. */
+interface AirportText {
+  municipality: string[];
+  name: string[];
+  tokens: Set<string>;
+}
+
+/** One AND term of a query: an airport matches when it holds the code or carries every token. */
 interface SearchTerm {
   codeHolders: ReadonlySet<number> | undefined;
   tokens: string[];
@@ -94,15 +132,17 @@ function releaseTransientParseMemory(): void {
 }
 
 /**
- * Tokenize a string for the text-search index: lowercase, strip diacritics,
- * replace non-alphanumerics with spaces, split, drop short stopwords.
+ * Tokenize a string for the text-search index: decompose, lowercase, strip
+ * diacritics, fold the Latin letters NFKD leaves whole (ł → l, ø → o, ß → ss),
+ * replace other non-alphanumerics with spaces, split, drop short stopwords.
+ * Lowercasing after NFKD keeps compatibility forms such as № → no.
  */
 function tokenize(text: string): string[] {
   return text
-    .toLowerCase()
     .normalize('NFKD')
+    .toLowerCase()
     .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/[^a-z0-9\s]/g, (char) => LATIN_FOLD.get(char) ?? ' ')
     .split(/\s+/)
     .filter((t) => t.length > 0 && !STOPWORD.has(t));
 }
@@ -137,17 +177,24 @@ export class AirportDataService {
   private navaidCoords = new Float64Array(0);
   private navaidList: Navaid[] = [];
 
-  /** Per-airport token set, parallel to `airportCoordIds` is NOT assumed — keyed by id. */
-  private readonly tokensByAirportId = new Map<number, Set<string>>();
+  /** Per-airport search text, keyed by id (not parallel to `airportCoordIds`). */
+  private readonly textByAirportId = new Map<number, AirportText>();
 
+  /** The bundle's snapshot.json record; undefined for a data drop without one. */
+  private snapshot: Snapshot | undefined;
   private loaded = false;
 
   constructor(private readonly dataDir: string) {}
 
-  /** Parse all six CSVs and build every index. Idempotent. */
+  /**
+   * Read the snapshot record, then parse all six CSVs and build every index.
+   * Idempotent. Throws naming `snapshot.json` when it is present but malformed.
+   */
   async load(): Promise<void> {
     if (this.loaded) return;
     const started = performance.now();
+    // First, so a malformed record fails startup before the CSV parse.
+    this.snapshot = await readSnapshot(this.dataDir);
 
     // Read → parse → drop one file at a time: each raw string is a temporary
     // that dies before the next read, and the awaits are GC yield points — so
@@ -171,8 +218,10 @@ export class AirportDataService {
         operation: 'AirportDataLoad',
         additionalContext: {
           dataDir: this.dataDir,
+          dataAsOf: this.dataAsOf,
+          fetchedAt: this.snapshot?.fetchedAt ?? null,
           airports: this.airportsById.size,
-          runways: this.runwaysByAirportRef.size,
+          airportsWithRunways: this.runwaysByAirportRef.size,
           navaids: this.navaidList.length,
           countries: this.countriesByCode.size,
           regions: this.regionsByCode.size,
@@ -335,11 +384,61 @@ export class AirportDataService {
   }
 
   private indexTokens(airport: Airport): void {
-    const tokens = new Set<string>();
-    for (const t of tokenize(airport.name)) tokens.add(t);
-    if (airport.municipality) for (const t of tokenize(airport.municipality)) tokens.add(t);
+    const name = tokenize(airport.name);
+    const municipality = airport.municipality ? tokenize(airport.municipality) : [];
+    const tokens = new Set([...name, ...municipality]);
     if (airport.keywords) for (const t of tokenize(airport.keywords)) tokens.add(t);
-    this.tokensByAirportId.set(airport.id, tokens);
+    this.textByAirportId.set(airport.id, { municipality, name, tokens });
+  }
+
+  /**
+   * Split a trimmed query into its AND terms and its tokens in query order, which
+   * ranking reads. A word that is an exact code becomes a term its code holders
+   * also satisfy; the tokens of every other word join one shared text term. Each
+   * distinct word is tokenized once and each distinct token or code term matched
+   * once, so matching work grows with the number of distinct tokens and codes in
+   * the query.
+   */
+  private queryTerms(query: string): {
+    exactCodeHolders: ReadonlySet<number> | undefined;
+    queryTokens: string[];
+    terms: SearchTerm[];
+  } {
+    const words = query.split(/\s+/);
+    const tokensByWord = new Map<string, string[]>();
+    const textTokens = new Set<string>();
+    /** Keyed by code and tokens, which together decide what a code term matches. */
+    const codeTerms = new Map<string, SearchTerm>();
+    const queryTokens: string[] = [];
+    let exactCodeHolders: ReadonlySet<number> | undefined;
+    for (const word of words) {
+      let tokens = tokensByWord.get(word);
+      if (tokens === undefined) {
+        tokens = tokenize(word);
+        tokensByWord.set(word, tokens);
+        if (tokens.length > 0) {
+          const code = word.toUpperCase();
+          const winner = this.codeIndex.get(code);
+          if (winner === undefined) {
+            for (const token of tokens) textTokens.add(token);
+          } else {
+            const key = `${code} ${tokens.join(' ')}`;
+            if (!codeTerms.has(key)) {
+              const codeHolders = new Set([winner]);
+              for (const holder of this.sharedCodeHolders.get(code) ?? []) {
+                codeHolders.add(holder.airport.id);
+              }
+              codeTerms.set(key, { codeHolders, tokens });
+              if (words.length === 1) exactCodeHolders = codeHolders;
+            }
+          }
+        }
+      }
+      for (const token of tokens) queryTokens.push(token);
+    }
+    const terms = [...codeTerms.values()];
+    if (textTokens.size > 0) terms.push({ codeHolders: undefined, tokens: [...textTokens] });
+    return { exactCodeHolders, queryTokens, terms };
   }
 
   private loadRunways(csv: string): void {
@@ -445,6 +544,15 @@ export class AirportDataService {
   // ---- Accessors ------------------------------------------------------------
 
   /**
+   * When the bundled OurAirports data was published (ISO 8601 UTC): the mirror's
+   * `Last-Modified`, so rebuilding unchanged data keeps it. Null when the data
+   * directory has no snapshot.json.
+   */
+  get dataAsOf(): string | null {
+    return this.snapshot?.sourceLastModified ?? null;
+  }
+
+  /**
    * Resolve a code (any of IATA/ICAO/GPS/local/ident, case-insensitive) to its
    * airport. Returns the match, which code space hit, and every other airport
    * carrying the same string in any space. Returns `undefined` when no code
@@ -489,7 +597,7 @@ export class AirportDataService {
   /**
    * Full-text + faceted airport search. Filters the complete corpus (not a
    * page): AND across terms with exact code matches and forward text prefixes.
-   * Applies country/region/type facets and excludes closed airports by default.
+   * Applies the country/region facets and the shared `AirportFacets`.
    */
   search(filters: SearchFilters): SearchResult {
     // A query of only stopwords/punctuation tokenizes to nothing. That is NOT
@@ -497,68 +605,57 @@ export class AirportDataService {
     // supplied search intent that matched no searchable term, so return zero
     // with a flag the tool turns into a "no searchable terms" notice (#3).
     const query = filters.query?.trim() ?? '';
-    const terms: SearchTerm[] = [];
-    let exactCodeHolders: ReadonlySet<number> | undefined;
-    if (query) {
-      const words = query.split(/\s+/);
-      for (const word of words) {
-        const tokens = tokenize(word);
-        if (tokens.length === 0) continue;
-        const code = word.toUpperCase();
-        const winner = this.codeIndex.get(code);
-        const codeHolders = winner === undefined ? undefined : new Set([winner]);
-        if (codeHolders) {
-          for (const holder of this.sharedCodeHolders.get(code) ?? []) {
-            codeHolders.add(holder.airport.id);
-          }
-          if (words.length === 1) exactCodeHolders = codeHolders;
-        }
-        terms.push({ tokens, codeHolders });
-      }
-    }
+    const { exactCodeHolders, queryTokens, terms } = this.queryTerms(query);
     if (query && terms.length === 0) {
       return { airports: [], totalMatched: 0, noSearchableTerms: true };
     }
-    const queryTokens = terms.flatMap((term) => term.tokens);
     const upperQuery = query.toUpperCase();
-    const expandedNameTerms = queryTokens.some((token) => NAME_EXPANSIONS.has(token))
-      ? queryTokens
-      : undefined;
     const country = filters.country?.toUpperCase();
     const region = filters.region?.toUpperCase();
-    type Candidate = { airport: Airport; exactCode: number; score: number; order: number };
-    const compareRank = (airport: Airport, exactCode: number, score: number, b: Candidate) =>
-      b.exactCode - exactCode || b.score - score || airport.name.localeCompare(b.airport.name);
+    /**
+     * A one-word code query leads with a tier of its code holders and the airports
+     * whose municipality is that word; a municipality holder wins a score tie (#38).
+     */
+    type Candidate = { airport: Airport; tier: number; score: number; city: number; order: number };
+    const compareRank = (
+      airport: Airport,
+      tier: number,
+      score: number,
+      city: number,
+      b: Candidate,
+    ) =>
+      b.tier - tier ||
+      b.score - score ||
+      b.city - city ||
+      airport.name.localeCompare(b.airport.name);
     const compare = (a: Candidate, b: Candidate) =>
-      compareRank(a.airport, a.exactCode, a.score, b) || a.order - b.order;
+      compareRank(a.airport, a.tier, a.score, a.city, b) || a.order - b.order;
     const page = new RankedPage(filters.limit, filters.offset ?? 0, compare);
     let totalMatched = 0;
 
     for (const airport of this.airportsById.values()) {
-      if (!filters.includeClosed && airport.type === 'closed') continue;
-      if (filters.type && airport.type !== filters.type) continue;
+      if (!passesAirportFacets(airport, filters)) continue;
       if (country && airport.isoCountry?.toUpperCase() !== country) continue;
       if (region && airport.isoRegion?.toUpperCase() !== region) continue;
 
-      if (terms.length > 0) {
-        const tokens = this.tokensByAirportId.get(airport.id);
-        if (!tokens) continue;
-        if (
-          !terms.every(
-            ({ codeHolders, tokens: needles }) =>
-              codeHolders?.has(airport.id) ||
-              needles.every((needle) => matchesTextToken(tokens, needle)),
-          )
+      const text = this.textByAirportId.get(airport.id);
+      if (!text) continue;
+      if (
+        !terms.every(
+          ({ codeHolders, tokens: needles }) =>
+            codeHolders?.has(airport.id) ||
+            needles.every((needle) => matchesTextToken(text.tokens, needle)),
         )
-          continue;
-      }
-      const exactCode = exactCodeHolders?.has(airport.id) ? 1 : 0;
-      const score = scoreAirport(airport, upperQuery, expandedNameTerms);
+      )
+        continue;
+      const city = exactCodeHolders && containsPhrase(text.municipality, queryTokens) ? 1 : 0;
+      const tier = city || exactCodeHolders?.has(airport.id) ? 1 : 0;
+      const score = scoreAirport(airport, upperQuery, queryTokens, text.name);
       const order = totalMatched++;
       // Later dataset rows lose comparator ties. Reject before allocating a candidate.
       const worst = page.worst;
-      if (worst && compareRank(airport, exactCode, score, worst) >= 0) continue;
-      page.offer({ airport, exactCode, score, order });
+      if (worst && compareRank(airport, tier, score, city, worst) >= 0) continue;
+      page.offer({ airport, tier, score, city, order });
     }
 
     return {
@@ -570,8 +667,8 @@ export class AirportDataService {
   /**
    * Runway-attribute search across the whole corpus, joined back to airports.
    * Mirrors `search()`'s airport-first filter order: airport-level facets
-   * (country/region/type, closed airports excluded unless opted in) narrow the
-   * airport set first, then each surviving airport's runways are filtered by
+   * (country/region and the shared `AirportFacets`) narrow the airport set
+   * first, then each surviving airport's runways are filtered by
    * surface (case-insensitive substring), min length/width, lighting, and the
    * closed-runway flag. Returns one row per runway in airport/runway traversal
    * order, or in parent-airport distance order when a spatial filter is set.
@@ -586,6 +683,10 @@ export class AirportDataService {
     const surfaces = typeof filters.surface === 'string' ? [filters.surface] : filters.surface;
     const fragments = surfaces?.map((fragment) => fragment.trim().toLowerCase());
     const { spatial } = filters;
+    const airportFacets: AirportFacets = {
+      ...filters,
+      includeClosed: filters.includeClosedAirports,
+    };
     const offset = filters.offset ?? 0;
     const matches: RunwayMatch[] = [];
     type Candidate = { airport: Airport; runway: Runway; distanceKm: number; order: number };
@@ -599,8 +700,7 @@ export class AirportDataService {
     let totalMatched = 0;
 
     for (const airport of this.airportsById.values()) {
-      if (!filters.includeClosedAirports && airport.type === 'closed') continue;
-      if (filters.type && airport.type !== filters.type) continue;
+      if (!passesAirportFacets(airport, airportFacets)) continue;
       if (country && airport.isoCountry?.toUpperCase() !== country) continue;
       if (region && airport.isoRegion?.toUpperCase() !== region) continue;
 
@@ -663,8 +763,8 @@ export class AirportDataService {
 
   /**
    * Airports within `radiusKm` of a coordinate, nearest-first by great-circle
-   * distance, filtered by type/closed, capped at `limit`. Each carries its
-   * distance and bearing from the query point; `totalMatched` counts every
+   * distance, filtered by the airport facets, capped at `limit`. Each carries
+   * its distance and bearing from the query point; `totalMatched` counts every
    * filtered in-radius airport before the cap.
    */
   nearbyAirports(
@@ -672,18 +772,14 @@ export class AirportDataService {
     lon: number,
     radiusKm: number,
     limit: number,
-    type: string | undefined,
-    includeClosed: boolean,
+    facets: AirportFacets,
     offset = 0,
   ): NearbyAirportsResult {
     const accept = (i: number): boolean => {
       const id = this.airportCoordIds[i];
       if (id === undefined) return false;
       const airport = this.airportsById.get(id);
-      if (!airport) return false;
-      if (!includeClosed && airport.type === 'closed') return false;
-      if (type && airport.type !== type) return false;
-      return true;
+      return airport !== undefined && passesAirportFacets(airport, facets);
     };
     const { hits, total } = nearest(this.airportCoords, lat, lon, radiusKm, limit, accept, offset);
     return {
@@ -801,6 +897,18 @@ export class AirportDataService {
   }
 }
 
+/**
+ * The airport-level facets every airport scan applies. `closed` is a type, so a
+ * `type` facet decides closed airports on its own and `includeClosed` widens
+ * only an untyped scan. Reads fields only: nothing is allocated per airport.
+ */
+function passesAirportFacets(airport: Airport, facets: AirportFacets): boolean {
+  const { type, scheduledService } = facets;
+  if (type ? airport.type !== type : !facets.includeClosed && airport.type === 'closed')
+    return false;
+  return scheduledService === undefined || airport.scheduledService === scheduledService;
+}
+
 function navaidPage(
   all: Navaid[] | undefined,
   type: string | undefined,
@@ -836,26 +944,45 @@ function hasTokenPrefix(haystack: Set<string>, needle: string): boolean {
 
 function matchesTextToken(haystack: Set<string>, needle: string): boolean {
   if (hasTokenPrefix(haystack, needle)) return true;
-  const expanded = NAME_EXPANSIONS.get(needle);
-  return expanded !== undefined && haystack.has(expanded);
+  const alternative = NAME_ALTERNATIVES.get(needle);
+  return alternative !== undefined && haystack.has(alternative);
 }
 
-function expandedNameScore(name: string, queryTokens: string[]): number {
-  const tokens = tokenize(name);
-  const lastStart = tokens.length - queryTokens.length;
+/**
+ * Name boost: 30 when the query tokens are the whole name, 10 when they appear
+ * as consecutive name tokens, else 0. A query token also matches its
+ * alternative, and the last may match as a forward prefix, which never counts
+ * as the whole name.
+ */
+function nameScore(name: string[], query: string[]): number {
+  const lastStart = name.length - query.length;
+  let contained = false;
   for (let i = 0; i <= lastStart; i++) {
-    const matches = queryTokens.every((query, j) => {
-      const token = tokens[i + j];
-      return token === query || token === NAME_EXPANSIONS.get(query);
+    let whole = lastStart === 0;
+    const matches = query.every((token, j) => {
+      const candidate = name[i + j] as string;
+      if (candidate === token || candidate === NAME_ALTERNATIVES.get(token)) return true;
+      whole = false;
+      return j === query.length - 1 && candidate.startsWith(token);
     });
-    if (matches) return lastStart === 0 ? 30 : 10;
+    if (matches && whole) return 30;
+    contained ||= matches;
   }
-  return 0;
+  return contained ? 10 : 0;
+}
+
+/** Whether `query` appears in `tokens` as consecutive whole tokens. */
+function containsPhrase(tokens: string[], query: string[]): boolean {
+  const lastStart = tokens.length - query.length;
+  for (let i = 0; i <= lastStart; i++) {
+    if (query.every((token, j) => tokens[i + j] === token)) return true;
+  }
+  return false;
 }
 
 /**
  * Light relevance score: prefer operational over closed, larger airports over
- * smaller, scheduled-service fields, and exact name/code hits on the query.
+ * smaller, scheduled-service fields, IATA equality, and name hits on the query.
  * Transparent ordering criteria — no synthetic composite "confidence".
  */
 const TYPE_RANK: Record<string, number> = {
@@ -871,19 +998,14 @@ const TYPE_RANK: Record<string, number> = {
 function scoreAirport(
   airport: Airport,
   query: string,
-  expandedNameTerms: string[] | undefined,
+  queryTokens: string[],
+  nameTokens: string[],
 ): number {
   let score = (TYPE_RANK[airport.type] ?? 0) * 10;
   if (airport.scheduledService) score += 5;
   if (query) {
-    if (airport.iataCode?.toUpperCase() === query || airport.icaoCode?.toUpperCase() === query)
-      score += 50;
-    const upperName = airport.name.toUpperCase();
-    if (upperName === query) score += 30;
-    else if (expandedNameTerms) {
-      const expanded = expandedNameScore(airport.name, expandedNameTerms);
-      score += upperName.includes(query) ? Math.max(10, expanded) : expanded;
-    } else if (upperName.includes(query)) score += 10;
+    if (airport.iataCode?.toUpperCase() === query) score += 50;
+    score += nameScore(nameTokens, queryTokens);
   }
   return score;
 }

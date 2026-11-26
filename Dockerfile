@@ -32,7 +32,8 @@ RUN mkdir -p skills
 
 # Fetch and bundle the OurAirports CSVs into data/ so the image is self-contained
 # (the server loads this bundled payload at setup() and never touches the network
-# at runtime). A weekly image rebuild refreshes the snapshot from the daily mirror.
+# at runtime). Each image build bundles the daily mirror's current snapshot, dated
+# in data/snapshot.json; nothing rebuilds the image on a schedule.
 RUN bun run build:data
 
 # Build the application

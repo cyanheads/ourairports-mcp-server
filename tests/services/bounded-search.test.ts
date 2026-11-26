@@ -47,13 +47,23 @@ describe('bounded search selection', () => {
       balloonport: 1,
       closed: 0,
     };
+    // The name boost reads the names indexed at load; the trials below rename rows
+    // only to vary the alphabetical tie-break.
+    const nameBoost = new Map(
+      rows.map((a) => {
+        const words = a.name
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(Boolean);
+        if (words.length === 1 && words[0] === 'airport') return [a.id, 30];
+        return [a.id, words.some((word) => word.startsWith('airport')) ? 10 : 0];
+      }),
+    );
     const score = (a: Airport, query: string | undefined) => {
       let n = (ranks[a.type] ?? 0) * 10 + (a.scheduledService ? 5 : 0);
       if (query) {
-        if (a.iataCode?.toUpperCase() === 'AIRPORT' || a.icaoCode?.toUpperCase() === 'AIRPORT')
-          n += 50;
-        if (a.name.toUpperCase() === 'AIRPORT') n += 30;
-        else if (a.name.toUpperCase().includes('AIRPORT')) n += 10;
+        if (a.iataCode?.toUpperCase() === 'AIRPORT') n += 50;
+        n += nameBoost.get(a.id) ?? 0;
       }
       return n;
     };
@@ -118,6 +128,17 @@ describe('bounded search selection', () => {
       expect(stored).toBe(1);
     } finally {
       Array.prototype.push = original;
+    }
+  });
+
+  it('pages one-word code tiers through the early reject in full-page order', () => {
+    for (const query of ['faro', 'palu', 'del', 'gago', 'HBE']) {
+      const full = svc.search({ query, includeClosed: false, limit: 100 });
+      const paged = Array.from({ length: full.totalMatched + 1 }, (_, offset) =>
+        svc.search({ query, includeClosed: false, limit: 1, offset }).airports.map((a) => a.ident),
+      ).flat();
+      expect(full.totalMatched).toBeGreaterThan(1);
+      expect(paged).toEqual(full.airports.map((a) => a.ident));
     }
   });
 

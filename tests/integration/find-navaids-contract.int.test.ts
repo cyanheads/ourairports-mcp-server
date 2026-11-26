@@ -99,6 +99,8 @@ toolContractSuite(findNavaidsTool, {
               power: 'HIGH',
               magneticVariationDeg: 16.123,
               slavedVariationDeg: 18.5,
+              distanceKm: 1.52,
+              bearingDeg: 181.7,
             },
           ],
         });

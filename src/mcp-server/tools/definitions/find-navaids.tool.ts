@@ -7,11 +7,12 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
-import { MAX_RADIUS_KM } from '@/services/airport-data/geo.js';
+import { bearingDeg, haversineKm, MAX_RADIUS_KM } from '@/services/airport-data/geo.js';
 import { NAVAID_TYPES } from '@/services/airport-data/types.js';
 import { pageLimit } from '../page-limit.js';
 import {
   buildResolutionNote,
+  DataAsOfSchema,
   escapeMarkdown,
   NavaidSchema,
   numOrDash,
@@ -23,10 +24,16 @@ import {
 
 const limitPolicy = pageLimit(50);
 
+/** Distance and bearing rounded to 0.01 km and 0.1°, the same in coordinate and airport modes. */
+const located = (distanceKm: number, bearing: number) => ({
+  distanceKm: Math.round(distanceKm * 100) / 100,
+  bearingDeg: Math.round(bearing * 10) / 10,
+});
+
 export const findNavaidsTool = tool('ourairports_find_navaids', {
   title: 'Find Navaids',
   description:
-    'Find navigation aids (VOR, VOR-DME, DME, NDB, NDB-DME, TACAN, VORTAC) by exactly one mode: latitude+longitude with optional radius_km, airport_code for navaids serving an airport, or ident for every exact navaid-code holder. Coordinate results rank nearest-first with distance (km) and bearing (degrees true); airport and ident results retain dataset order. frequencyKhz is stored for every type; frequencyMhz is the VHF or paired-VHF frequency and is null for NDB and NDB-DME. Each navaid includes DME pairing, usage, power, and magnetic variation. totalCount counts filtered matches before paging; pass nextOffset as offset with the same query to continue. An unmatched ident or an airport with no associated navaids returns an empty list; an unknown airport_code is an error. Shared airport codes carry a resolutionNote naming the other airport idents. OurAirports is community-edited — not authoritative for flight operations.',
+    'Find navigation aids (VOR, VOR-DME, DME, NDB, NDB-DME, TACAN, VORTAC) by exactly one mode: latitude+longitude with optional radius_km, airport_code for navaids serving an airport, or ident for every exact navaid-code holder. Coordinate results rank nearest-first with distance (km) and bearing (degrees true) from the query point. Airport results retain dataset order with distance and bearing from the airport reference point; ident results retain dataset order without them. frequencyKhz is stored for every type; frequencyMhz is the VHF or paired-VHF frequency and is null for NDB and NDB-DME. Each navaid includes DME pairing, usage, power, and magnetic variation. totalCount counts filtered matches before paging; pass nextOffset as offset with the same query to continue. An unmatched ident or an airport with no associated navaids returns an empty list; an unknown airport_code is an error. Shared airport codes carry a resolutionNote naming the other airport idents. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   errors: [
@@ -115,16 +122,16 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
             .number()
             .nullable()
             .describe(
-              'Great-circle distance from the query point in km (coordinate mode); null in airport and ident modes.',
+              'Great-circle distance in km: from the query point in coordinate mode, from the airport reference point in airport mode; null in ident mode.',
             ),
           bearingDeg: z
             .number()
             .nullable()
             .describe(
-              'Bearing from the query point in degrees true (coordinate mode); null in airport and ident modes.',
+              'Initial bearing in degrees true: from the query point in coordinate mode, from the airport reference point in airport mode; null in ident mode.',
             ),
         }).describe(
-          'A navaid with its frequency (kHz, plus MHz where the type has a VHF frequency), type, position, DME pairing, service volume, power, magnetic variation, and — in coordinate mode — distance and bearing from the query point.',
+          'A navaid with its frequency (kHz, plus MHz where the type has a VHF frequency), type, position, DME pairing, service volume, power, magnetic variation, and — in coordinate and airport modes — distance and bearing from the query point or airport reference point.',
         ),
       )
       .describe(
@@ -167,6 +174,7 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
       .describe(
         "Airport mode, present only when airport_code is also a code of other airports: the identifier space that matched, why this airport won, and each other airport's ident, country, and code space.",
       ),
+    dataAsOf: DataAsOfSchema,
   },
 
   enrichmentTrailer: {
@@ -226,6 +234,7 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
       }
       if (total === 0) notices.push(emptyNotice);
       if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
+      ctx.enrich({ dataAsOf: svc.dataAsOf });
       return result;
     };
 
@@ -250,8 +259,7 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
           airportIdent: null,
           navaids: hits.map((h) => ({
             ...toNavaid(h.navaid),
-            distanceKm: Math.round(h.distanceKm * 100) / 100,
-            bearingDeg: Math.round(h.bearingDeg * 10) / 10,
+            ...located(h.distanceKm, h.bearingDeg),
           })),
         },
         totalMatched,
@@ -293,11 +301,18 @@ export const findNavaidsTool = tool('ourairports_find_navaids', {
       ctx.enrich({ resolutionNote: buildResolutionNote(code, resolution) });
     }
     const { navaids, totalMatched } = svc.navaidsForAirport(ident, input.type, limit, input.offset);
+    const { latitudeDeg: lat, longitudeDeg: lon } = airport;
     return finish(
       {
         mode: 'airport' as const,
         airportIdent: ident,
-        navaids: navaids.map((n) => ({ ...toNavaid(n), distanceKm: null, bearingDeg: null })),
+        navaids: navaids.map((n) => ({
+          ...toNavaid(n),
+          ...located(
+            haversineKm(lat, lon, n.latitudeDeg, n.longitudeDeg),
+            bearingDeg(lat, lon, n.latitudeDeg, n.longitudeDeg),
+          ),
+        })),
       },
       totalMatched,
       `Airport ${ident} was found but has no associated navaids${input.type ? ` of type ${input.type}` : ''} in the dataset. Many small fields have none; try coordinate mode around ${airport.latitudeDeg}, ${airport.longitudeDeg} to find nearby enroute navaids.`,

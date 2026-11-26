@@ -19,6 +19,7 @@ const { searchAirportsTool } = await import(
 );
 const { searchRunwaysTool } = await import('@/mcp-server/tools/definitions/search-runways.tool.js');
 const { listCountriesTool } = await import('@/mcp-server/tools/definitions/list-countries.tool.js');
+const { findAirportsTool } = await import('@/mcp-server/tools/definitions/find-airports.tool.js');
 
 describe('facet validation and scoped discovery', () => {
   for (const definition of [searchAirportsTool, searchRunwaysTool]) {
@@ -164,6 +165,88 @@ describe('facet validation and scoped discovery', () => {
   });
 });
 
+describe('closed type and scheduled service across the airport-facet tools (#33, #35)', () => {
+  const ANKANG = { latitude: 32.7, longitude: 108.9 };
+  toolContractSuite(searchAirportsTool, {
+    success: [
+      { name: 'type closed without include_closed', input: { type: 'closed' } },
+      { name: 'scheduled_service', input: { scheduled_service: false, country: 'CN' } },
+    ],
+  });
+  toolContractSuite(searchRunwaysTool, {
+    success: [
+      { name: 'type closed without include_closed_airports', input: { type: 'closed' } },
+      { name: 'scheduled_service', input: { scheduled_service: true, region: 'US-WA' } },
+    ],
+  });
+  toolContractSuite(findAirportsTool, {
+    success: [
+      { name: 'type closed without include_closed', input: { ...ANKANG, type: 'closed' } },
+      { name: 'scheduled_service', input: { ...ANKANG, scheduled_service: true } },
+    ],
+  });
+
+  /** totalCount on structuredContent and its `**N total**` line in content[]. */
+  async function totals(results: Promise<Awaited<ReturnType<typeof runToolContract>>>[]) {
+    return (await Promise.all(results)).map((result) => {
+      expect(result.isError).toBeFalsy();
+      const { totalCount } = result.structuredContent as { totalCount: number };
+      expect(JSON.stringify(result.content)).toContain(`**${totalCount} total**`);
+      return totalCount;
+    });
+  }
+
+  it('type closed counts the closed airports with the closed flag omitted, false, or true', async () => {
+    expect(
+      await totals([
+        runToolContract(searchAirportsTool, { type: 'closed', limit: 1 }),
+        runToolContract(searchAirportsTool, { type: 'closed', include_closed: false, limit: 1 }),
+        runToolContract(searchAirportsTool, { type: 'closed', include_closed: true, limit: 1 }),
+        runToolContract(searchRunwaysTool, { type: 'closed', limit: 1 }),
+        runToolContract(searchRunwaysTool, {
+          type: 'closed',
+          include_closed_airports: false,
+          limit: 1,
+        }),
+        runToolContract(searchRunwaysTool, {
+          type: 'closed',
+          include_closed_airports: true,
+          limit: 1,
+        }),
+        runToolContract(findAirportsTool, { ...ANKANG, type: 'closed', limit: 1 }),
+        runToolContract(findAirportsTool, {
+          ...ANKANG,
+          type: 'closed',
+          include_closed: false,
+          limit: 1,
+        }),
+        runToolContract(findAirportsTool, { ...ANKANG, type: 'closed', include_closed: true }),
+      ]),
+    ).toEqual([6, 6, 6, 2, 2, 2, 1, 1, 1]);
+  });
+
+  it('scheduled_service narrows totalCount and leaves the closed exclusion in place', async () => {
+    expect(
+      await totals([
+        runToolContract(searchAirportsTool, { limit: 1 }),
+        runToolContract(searchAirportsTool, { scheduled_service: true, limit: 1 }),
+        runToolContract(searchAirportsTool, { scheduled_service: false, limit: 1 }),
+        runToolContract(searchAirportsTool, {
+          scheduled_service: true,
+          include_closed: true,
+          limit: 1,
+        }),
+        runToolContract(searchAirportsTool, { scheduled_service: true, type: 'closed' }),
+        runToolContract(searchRunwaysTool, { limit: 1 }),
+        runToolContract(searchRunwaysTool, { scheduled_service: true, limit: 1 }),
+        runToolContract(findAirportsTool, { ...ANKANG, limit: 1 }),
+        runToolContract(findAirportsTool, { ...ANKANG, scheduled_service: true, limit: 1 }),
+        runToolContract(findAirportsTool, { ...ANKANG, scheduled_service: false }),
+      ]),
+    ).toEqual([44, 19, 25, 20, 1, 9, 9, 3, 2, 1]);
+  });
+});
+
 toolContractSuite(listCountriesTool, {
   success: [{ name: 'country-scoped regions', input: { country: 'US', include_regions: true } }],
   errors: [
@@ -180,7 +263,7 @@ describe('pre-change characterization', () => {
   it('preserves ranking, caps, totals, blank-query browse and tokenless-query empty', async () => {
     const ranked = svc.search({ includeClosed: false, limit: 3 });
     expect(ranked.airports.map((a) => a.ident)).toEqual(['VIDP', 'KJFK', 'SBGL']);
-    expect(ranked.totalMatched).toBe(26);
+    expect(ranked.totalMatched).toBe(44);
     expect(svc.search({ query: '   ', includeClosed: false, limit: 3 })).toEqual(ranked);
     expect(svc.search({ query: '!!!', includeClosed: false, limit: 3 })).toEqual({
       airports: [],

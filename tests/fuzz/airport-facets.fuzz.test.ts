@@ -16,8 +16,14 @@ const { searchAirportsTool } = await import(
 );
 const { searchRunwaysTool } = await import('@/mcp-server/tools/definitions/search-runways.tool.js');
 const { listCountriesTool } = await import('@/mcp-server/tools/definitions/list-countries.tool.js');
+const { findAirportsTool } = await import('@/mcp-server/tools/definitions/find-airports.tool.js');
 
-for (const definition of [searchAirportsTool, searchRunwaysTool, listCountriesTool]) {
+for (const definition of [
+  searchAirportsTool,
+  searchRunwaysTool,
+  findAirportsTool,
+  listCountriesTool,
+]) {
   it(`${definition.name} handles generated and adversarial facets without crashes or leaks`, async () => {
     const report = await fuzzTool(definition, { numRuns: 30, numAdversarial: 20, seed: 20261018 });
     expect(report.crashes).toHaveLength(0);

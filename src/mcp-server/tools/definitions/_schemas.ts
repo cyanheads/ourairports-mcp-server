@@ -252,6 +252,18 @@ export const NavaidSchema = z
     'A navigation aid with its frequency (kHz, plus MHz where the type has a VHF frequency), type, position, DME pairing, service volume, power, and magnetic variation.',
   );
 
+/**
+ * The snapshot date every tool returns through its `enrichment` block and the
+ * `airport://` resource returns in its output. Required: each handler writes it
+ * once on the path every success result takes.
+ */
+export const DataAsOfSchema = z
+  .string()
+  .nullable()
+  .describe(
+    'When the OurAirports data behind this result was published (ISO 8601 UTC). It changes only when the data is refreshed; if it differs between pages of one query, restart from offset 0. Null when the snapshot date is unknown.',
+  );
+
 // ---- domain → output mappers ----------------------------------------------
 
 /** Map a domain Airport to the summary output shape, resolving country/region names. */

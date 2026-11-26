@@ -211,15 +211,25 @@ export interface AirportNavaidsResult {
   totalMatched: number;
 }
 
-/** Filters accepted by the full-text / faceted airport search. */
-export interface SearchFilters {
-  country?: string;
+/**
+ * Airport-level facets shared by airport search, runway search, and the nearby
+ * scan. `type` selects one type, `closed` included, so `type: 'closed'` needs no
+ * `includeClosed`; without `type`, closed airports pass only with it.
+ * `scheduledService` is tri-state — omitted means "either".
+ */
+export interface AirportFacets {
   includeClosed: boolean;
+  scheduledService?: boolean;
+  type?: string;
+}
+
+/** Filters accepted by the full-text / faceted airport search. */
+export interface SearchFilters extends AirportFacets {
+  country?: string;
   limit: number;
   offset?: number;
   query?: string;
   region?: string;
-  type?: string;
 }
 
 /** Result of an airport search — the hits plus the pre-limit total. */
@@ -236,15 +246,16 @@ export interface SearchResult {
 
 /**
  * Filters accepted by the runway-attribute search. Airport-level facets
- * (country/region/type/includeClosedAirports) narrow the airport set first;
- * runway-level facets (surface/minLengthFt/minWidthFt/lighted/
- * includeClosedRunways) then filter each surviving airport's runways.
+ * (country/region/type/scheduledService/includeClosedAirports, the last acting
+ * as `AirportFacets.includeClosed`) narrow the airport set first; runway-level
+ * facets (surface/minLengthFt/minWidthFt/lighted/includeClosedRunways) then
+ * filter each surviving airport's runways.
  *
  * `minLengthFt`/`minWidthFt` are exclusion thresholds: a runway with an unknown
  * value for the corresponding field is excluded, never treated as passing.
  * `lighted` is tri-state — omitted means "either", not "unlighted".
  */
-export interface RunwaySearchFilters {
+export interface RunwaySearchFilters extends Omit<AirportFacets, 'includeClosed'> {
   country?: string;
   includeClosedAirports: boolean;
   includeClosedRunways: boolean;
@@ -256,7 +267,6 @@ export interface RunwaySearchFilters {
   region?: string;
   spatial?: { latitude: number; longitude: number; radiusKm: number };
   surface?: string | readonly string[];
-  type?: string;
 }
 
 /** A matched runway paired with its airport — one flat join row per runway. */

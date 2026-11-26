@@ -12,7 +12,12 @@ import { pageLimit } from '@/mcp-server/tools/page-limit.js';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
 import { MAX_RADIUS_KM } from '@/services/airport-data/geo.js';
 import { AIRPORT_TYPES } from '@/services/airport-data/types.js';
-import { AirportSummarySchema, renderAirportLines, toAirportSummary } from './_schemas.js';
+import {
+  AirportSummarySchema,
+  DataAsOfSchema,
+  renderAirportLines,
+  toAirportSummary,
+} from './_schemas.js';
 
 const airportPageLimit = pageLimit(50);
 
@@ -42,11 +47,21 @@ export const findAirportsTool = tool('ourairports_find_airports', {
     type: z
       .enum(AIRPORT_TYPES)
       .optional()
-      .describe('Restrict to one airport type (e.g. large_airport for major fields only).'),
+      .describe(
+        'Restrict to one airport type (e.g. large_airport for major fields only). closed returns closed airports without include_closed.',
+      ),
     include_closed: z
       .boolean()
       .default(false)
-      .describe('Include airports of type "closed". Off by default.'),
+      .describe(
+        'Include airports of type "closed" alongside the other types. Off by default. type "closed" returns closed airports without this flag.',
+      ),
+    scheduled_service: z
+      .boolean()
+      .optional()
+      .describe(
+        'Filter by scheduled airline service: true for airports with it, false for airports without. Omit to include both. OurAirports records whether an airport has airline service, not current schedules or routes.',
+      ),
     limit: airportPageLimit.schema,
     offset: z
       .number()
@@ -82,7 +97,7 @@ export const findAirportsTool = tool('ourairports_find_airports', {
     totalCount: z
       .number()
       .describe(
-        'Airports within the radius that pass the type and include_closed filters, counted before offset and limit.',
+        'Airports within the radius that pass the type, scheduled_service, and include_closed filters, counted before offset and limit.',
       ),
     truncated: z
       .boolean()
@@ -105,6 +120,7 @@ export const findAirportsTool = tool('ourairports_find_airports', {
       .string()
       .optional()
       .describe('Guidance for an empty page, continuation, or a clamped limit.'),
+    dataAsOf: DataAsOfSchema,
   },
 
   handler(input, ctx) {
@@ -115,8 +131,11 @@ export const findAirportsTool = tool('ourairports_find_airports', {
       input.longitude,
       input.radius_km,
       limit,
-      input.type,
-      input.include_closed,
+      {
+        ...(input.type && { type: input.type }),
+        ...(input.scheduled_service !== undefined && { scheduledService: input.scheduled_service }),
+        includeClosed: input.include_closed,
+      },
       input.offset,
     );
 
@@ -128,18 +147,23 @@ export const findAirportsTool = tool('ourairports_find_airports', {
       ctx.enrich({ nextOffset });
       notices.push('Use nextOffset as offset with the same query to continue.');
     } else if (totalMatched === 0) {
+      const scheduled = input.scheduled_service;
       notices.push(
-        `No airports within ${input.radius_km} km of ${input.latitude}, ${input.longitude}${input.type ? ` of type ${input.type}` : ''}.`,
+        `No airports within ${input.radius_km} km of ${input.latitude}, ${input.longitude}${input.type ? ` of type ${input.type}` : ''}${scheduled === undefined ? '' : ` with scheduled_service=${scheduled}`}.`,
       );
       if (input.radius_km < MAX_RADIUS_KM) notices.push(`Widen radius_km (max ${MAX_RADIUS_KM}).`);
       if (input.type) notices.push('Drop the type filter.');
-      if (!input.include_closed) notices.push('Set include_closed to include closed airports.');
+      if (scheduled !== undefined) notices.push('Drop the scheduled_service filter.');
+      // A typed search already decides closed airports; the opt-in only widens an untyped one.
+      if (!input.type && !input.include_closed)
+        notices.push('Set include_closed to include closed airports.');
     } else if (hits.length === 0) {
       notices.push(
         `Offset ${input.offset} is past the ${totalMatched} matching airports. Use a smaller offset to see results.`,
       );
     }
     if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
+    ctx.enrich({ dataAsOf: svc.dataAsOf });
 
     return {
       airports: hits.map((h) => ({

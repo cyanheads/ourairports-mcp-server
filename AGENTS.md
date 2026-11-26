@@ -122,7 +122,7 @@ None. This is a data/lookup server with no recurring multi-step interaction patt
 
 ### Server config
 
-The real schema — two optional knobs, no API key. `OURAIRPORTS_DATA_DIR` defaults to the bundled `data/` (resolved by `resolveBundledDataDir()` when unset). `parseEnvConfig` treats empty values and unsubstituted MCPB placeholders as unset.
+The real schema — three optional knobs, no API key. `OURAIRPORTS_DATA_DIR` defaults to the bundled `data/` (resolved by `resolveBundledDataDir()` when unset); a data directory without `snapshot.json` reports `dataAsOf: null`. `parseEnvConfig` treats empty values and unsubstituted MCPB placeholders as unset.
 
 ```ts
 // src/config/server-config.ts — lazy-parsed, separate from framework config
@@ -132,10 +132,13 @@ import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 const ServerConfigSchema = z.object({
   dataDir: z
     .string().optional()
-    .describe('Directory holding the six OurAirports CSV files. Defaults to the bundled `data/`.'),
+    .describe('Directory holding the six OurAirports CSV files and `snapshot.json`. Defaults to the bundled `data/`.'),
   defaultSearchLimit: z.coerce
     .number().int().min(1).max(100).default(20)
     .describe('Default result cap for search/find tools when the caller omits `limit`.'),
+  clampLimits: z
+    .stringbool().default(true)
+    .describe('Clamp explicit limits above a tool ceiling. False restores strict limit validation.'),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
@@ -143,6 +146,7 @@ export function getServerConfig() {
   _config ??= parseEnvConfig(ServerConfigSchema, {
     dataDir: 'OURAIRPORTS_DATA_DIR',
     defaultSearchLimit: 'OURAIRPORTS_DEFAULT_SEARCH_LIMIT',
+    clampLimits: 'OURAIRPORTS_CLAMP_LIMITS',
   });
   return _config;
 }
@@ -247,13 +251,14 @@ See framework CLAUDE.md and the `api-errors` skill for the full auto-classificat
 src/
   index.ts                              # createApp() — registers tools/resources, loads index at setup()
   config/
-    server-config.ts                    # OURAIRPORTS_DATA_DIR + OURAIRPORTS_DEFAULT_SEARCH_LIMIT (Zod)
+    server-config.ts                    # OURAIRPORTS_DATA_DIR, _DEFAULT_SEARCH_LIMIT, _CLAMP_LIMITS (Zod)
   services/
     airport-data/
       airport-data-service.ts           # Load-on-setup() index, code resolution, search, geo accessors
       csv.ts                            # Header-keyed CSV parser
       data-dir.ts                       # Resolves the bundled data/ directory (override-aware)
       geo.ts                            # Haversine distance + bearing
+      snapshot.ts                       # snapshot.json provenance record (dataAsOf source), shared with build-data
       types.ts                          # Airport/Runway/Navaid/Frequency domain types + enums
   mcp-server/
     tools/definitions/
@@ -270,7 +275,7 @@ src/
       index.ts                          # allResourceDefinitions barrel
 
 scripts/
-  build-data.ts                         # Build-time fetch + bundle of the six OurAirports CSVs into data/
+  build-data.ts                         # Build-time fetch of the six OurAirports CSVs + snapshot.json into data/ (--check validates)
 data/                                   # Bundled CSVs (gitignored locally; baked into the package + image)
 docs/design.md                          # Architecture rationale — read before changing the service
 ```

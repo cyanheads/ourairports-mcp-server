@@ -14,6 +14,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import {
   AirportDetailSchema,
   buildResolutionNote,
+  DataAsOfSchema,
   FrequencySchema,
   RunwaySchema,
   toAirportDetail,
@@ -68,6 +69,7 @@ export const airportResource = resource('airport://{code}', {
     frequencies: z
       .array(FrequencySchema)
       .describe('Radio frequencies in MHz (empty array when none recorded).'),
+    dataAsOf: DataAsOfSchema,
   }),
 
   handler(params, ctx) {
@@ -89,6 +91,7 @@ export const airportResource = resource('airport://{code}', {
       resolutionNote: buildResolutionNote(params.code, resolution),
       runways: svc.runwaysForAirport(airport.id).map(toRunway),
       frequencies: svc.frequenciesForAirport(airport.id).map(toFrequency),
+      dataAsOf: svc.dataAsOf,
     };
   },
 });

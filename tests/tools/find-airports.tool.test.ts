@@ -209,7 +209,7 @@ describe('findAirportsTool pre-limit totals and truncation disclosure (#11)', ()
     const { text, structured } = await call({ ...SEA, limit: 2 });
     expect(structured.airports).toHaveLength(2);
     expect(structured.totalCount).toBe(2);
-    expect(Object.keys(structured).sort()).toEqual(['airports', 'totalCount']);
+    expect(Object.keys(structured).sort()).toEqual(['airports', 'dataAsOf', 'totalCount']);
     expect(text).not.toContain('truncated');
   });
 
@@ -217,13 +217,18 @@ describe('findAirportsTool pre-limit totals and truncation disclosure (#11)', ()
     const { structured } = await call({ latitude: 0, longitude: 0, radius_km: 50 });
     expect(structured.totalCount).toBe(0);
     expect(structured.notice).toMatch(/^No airports within 50 km of 0, 0\./);
-    expect(Object.keys(structured).sort()).toEqual(['airports', 'notice', 'totalCount']);
+    expect(Object.keys(structured).sort()).toEqual([
+      'airports',
+      'dataAsOf',
+      'notice',
+      'totalCount',
+    ]);
   });
 
   it('declares the truncation fields on the effective output schema', () => {
     const parsed = findAirportsTool.output
       .extend(findAirportsTool.enrichment!)
-      .parse({ airports: [], totalCount: 5, truncated: true, shown: 1, cap: 1 });
+      .parse({ airports: [], totalCount: 5, truncated: true, shown: 1, cap: 1, dataAsOf: null });
     expect(parsed).toMatchObject({ totalCount: 5, truncated: true, shown: 1, cap: 1 });
   });
 
@@ -292,14 +297,9 @@ describe('findAirportsTool pre-limit totals and truncation disclosure (#11)', ()
   );
 
   it('passes the clamped limit to the service and preserves continuation guidance', async () => {
-    const [hit] = svc.nearbyAirports(
-      SEA.latitude,
-      SEA.longitude,
-      100,
-      1,
-      undefined,
-      false,
-    ).airports;
+    const [hit] = svc.nearbyAirports(SEA.latitude, SEA.longitude, 100, 1, {
+      includeClosed: false,
+    }).airports;
     expect(hit).toBeDefined();
     const spy = vi.spyOn(svc, 'nearbyAirports').mockReturnValueOnce({
       airports: Array.from({ length: 50 }, (_, id) => ({
@@ -336,5 +336,99 @@ describe('findAirportsTool content rendering', () => {
       expect(text).toContain(`**Location:** ${airport.latitudeDeg}, ${airport.longitudeDeg} ·`);
     }
     expect(text).toContain('**Location:** 47.529999, -122.302002 ·');
+  });
+});
+
+describe('findAirportsTool closed type and scheduled service (#33, #35)', () => {
+  type Input = z.input<typeof findAirportsTool.input>;
+  type Structured = Awaited<ReturnType<typeof findAirportsTool.handler>> & {
+    totalCount: number;
+    notice?: string;
+  };
+  async function call(input: Input) {
+    const result = await runToolContract(findAirportsTool, input);
+    expect(result.isError).toBeFalsy();
+    const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
+    return { text, structured: result.structuredContent as Structured };
+  }
+  const idents = (structured: Structured) => structured.airports.map((h) => h.airport.ident);
+  const ANKANG = { latitude: 32.7, longitude: 108.9, radius_km: 50 };
+
+  it('returns closed airports for type closed whether include_closed is omitted or false', async () => {
+    const opted = await call({ ...ANKANG, type: 'closed', include_closed: true });
+    expect(idents(opted.structured)).toEqual(['CN-0119']);
+    for (const include of [undefined, false]) {
+      const { text, structured } = await call({
+        ...ANKANG,
+        type: 'closed',
+        ...(include !== undefined && { include_closed: include }),
+      });
+      expect(structured).toEqual(opted.structured);
+      expect(text).toContain('(ident CN-0119,');
+    }
+  });
+
+  it('filters by scheduled_service on both surfaces, ANDed with type and include_closed', async () => {
+    const scheduled = await call({ ...ANKANG, scheduled_service: true });
+    expect(idents(scheduled.structured)).toEqual(['ZLAK', 'CN-0114']);
+    expect(scheduled.structured.totalCount).toBe(2);
+    expect(scheduled.text.split('**Scheduled service:** yes')).toHaveLength(3);
+    expect(scheduled.text).not.toContain('**Scheduled service:** no');
+    const unscheduled = await call({ ...ANKANG, scheduled_service: false });
+    expect(idents(unscheduled.structured)).toEqual(['CN-0118']);
+    const all = await call(ANKANG);
+    expect(all.structured.totalCount).toBe(3);
+    const withClosed = await call({ ...ANKANG, scheduled_service: true, include_closed: true });
+    expect(idents(withClosed.structured)).toEqual(['CN-0119', 'ZLAK', 'CN-0114']);
+    const medium = await call({ ...ANKANG, scheduled_service: true, type: 'medium_airport' });
+    expect(idents(medium.structured)).toEqual(['CN-0114']);
+  });
+
+  it('describes totalCount as counting the scheduled_service filter', () => {
+    expect(findAirportsTool.enrichment?.totalCount?.description).toContain('scheduled_service');
+  });
+
+  it.each<[Input, string]>([
+    [
+      { latitude: 0, longitude: 0, radius_km: 50, type: 'closed' },
+      'No airports within 50 km of 0, 0 of type closed. Widen radius_km (max 20016). Drop the type filter.',
+    ],
+    [
+      { latitude: 0, longitude: 0, radius_km: 50, include_closed: true },
+      'No airports within 50 km of 0, 0. Widen radius_km (max 20016).',
+    ],
+    [
+      { latitude: 47.6, longitude: -122.3, type: 'balloonport' },
+      'No airports within 100 km of 47.6, -122.3 of type balloonport. Widen radius_km (max 20016). Drop the type filter.',
+    ],
+    [
+      { latitude: 47.45, longitude: -122.31, scheduled_service: false },
+      'No airports within 100 km of 47.45, -122.31 with scheduled_service=false. Widen radius_km (max 20016). Drop the scheduled_service filter. Set include_closed to include closed airports.',
+    ],
+    [
+      { ...ANKANG, type: 'closed', scheduled_service: false },
+      'No airports within 50 km of 32.7, 108.9 of type closed with scheduled_service=false. Widen radius_km (max 20016). Drop the type filter. Drop the scheduled_service filter.',
+    ],
+    [
+      { ...ANKANG, radius_km: 20016, type: 'balloonport', scheduled_service: true },
+      'No airports within 20016 km of 32.7, 108.9 of type balloonport with scheduled_service=true. Drop the type filter. Drop the scheduled_service filter.',
+    ],
+  ])(
+    'names the filters set and only remedies that could add rows for %j',
+    async (input, notice) => {
+      const { text, structured } = await call(input);
+      expect(structured).toMatchObject({ airports: [], totalCount: 0, notice });
+      expect(text).toContain(`> ${notice}`);
+    },
+  );
+
+  it('rejects a non-boolean scheduled_service at argument validation', async () => {
+    const input = { ...ANKANG, scheduled_service: 1 } as unknown as Input;
+    const result = await runToolContract(findAirportsTool, input);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(JSON.stringify(result.content)).toContain('scheduled_service');
   });
 });

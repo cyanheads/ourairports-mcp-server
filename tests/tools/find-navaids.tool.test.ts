@@ -1,6 +1,7 @@
 /**
- * @fileoverview Tests for ourairports_find_navaids — the two-mode contract
- * (coordinate vs airport, exactly one), kHz frequency surfacing with MHz only
+ * @fileoverview Tests for ourairports_find_navaids — the mode contract
+ * (coordinate, airport, or ident, exactly one), distance and bearing from the
+ * query point or airport reference point, kHz frequency surfacing with MHz only
  * for VHF-bearing types, the service-volume fields, pre-limit totals and
  * truncation disclosure, the found-but-unserved notice, the shared-code
  * resolution note in airport mode, escaped text / exact positions in
@@ -67,7 +68,9 @@ describe('findNavaidsTool', () => {
     expect(result.navaids).toHaveLength(1);
     expect(result.navaids[0]?.frequencyKhz).toBe(116800);
     expect(result.navaids[0]?.frequencyMhz).toBeCloseTo(116.8, 3);
-    expect(result.navaids[0]?.distanceKm).toBeNull();
+    // From KSEA's reference point (47.449001, -122.308998) to SEA (47.435372, -122.309608).
+    expect(result.navaids[0]?.distanceKm).toBe(1.52);
+    expect(result.navaids[0]?.bearingDeg).toBe(181.7);
   });
 
   it('airport mode: empty list + notice when airport has no navaids', async () => {
@@ -202,9 +205,40 @@ describe('findNavaidsTool ranking and association order (characterization)', () 
     expect(result.navaids.map((n) => n.ident)).toEqual(['CRI']);
   });
 
-  it('airport mode returns navaids in association (dataset) order', async () => {
+  it('airport mode returns navaids in association (dataset) order with distance and bearing from the airport', async () => {
     const result = await run({ airport_code: 'KJFK', limit: 50 });
-    expect(result.navaids.map((n) => n.ident)).toEqual(['JFK', 'CRI']);
+    expect(result.navaids.map((n) => [n.ident, n.distanceKm, n.bearingDeg])).toEqual([
+      ['JFK', 0.76, 174.3],
+      ['CRI', 10.21, 252.7],
+    ]);
+  });
+
+  it.each(['KSEA', 'KJFK', 'LELN'])(
+    'airport mode matches coordinate mode queried from the airport reference point (%s)',
+    async (code) => {
+      const airport = svc.resolveByCode(code)!.airport;
+      const byAirport = await run({ airport_code: code, limit: 50 });
+      const byPoint = await run({
+        latitude: airport.latitudeDeg,
+        longitude: airport.longitudeDeg,
+        radius_km: 50,
+        limit: 50,
+      });
+      expect(byAirport.navaids.length).toBeGreaterThan(0);
+      for (const n of byAirport.navaids) {
+        const same = byPoint.navaids.find((p) => p.id === n.id);
+        expect([n.ident, n.distanceKm, n.bearingDeg]).toEqual([
+          same?.ident,
+          same?.distanceKm,
+          same?.bearingDeg,
+        ]);
+      }
+    },
+  );
+
+  it('ident mode keeps distance and bearing null', async () => {
+    const result = await run({ ident: 'BIK' });
+    expect(result.navaids.length).toBe(2);
     expect(result.navaids.every((n) => n.distanceKm === null && n.bearingDeg === null)).toBe(true);
   });
 
@@ -244,7 +278,7 @@ describe('findNavaidsTool content and shared-code disclosure', () => {
         '**Frequency:** 116800 kHz (paired VHF 116.8 MHz)',
         '**Usage:** BOTH | **Power:** HIGH | **Magnetic variation:** 16.123° actual, 18.5° slaved',
         '**Position:** 47.435372, -122.309608 · elevation 425 ft',
-        '**Distance:** — km at —°',
+        '**Distance:** 1.52 km at 181.7°',
         '**DME channel:** 115X · paired VHF 116800 kHz | **Serves:** KSEA | **Country:** US',
       ].join('\n'),
     );
@@ -254,6 +288,7 @@ describe('findNavaidsTool content and shared-code disclosure', () => {
     const { structured } = await call({ airport_code: 'KSEA' });
     expect(Object.keys(structured).sort()).toEqual([
       'airportIdent',
+      'dataAsOf',
       'mode',
       'navaids',
       'totalCount',
@@ -359,6 +394,7 @@ describe('findNavaidsTool pre-limit totals and truncation disclosure (#11)', () 
     expect(structured.navaids).toHaveLength(4);
     expect(Object.keys(structured).sort()).toEqual([
       'airportIdent',
+      'dataAsOf',
       'mode',
       'navaids',
       'totalCount',
@@ -402,6 +438,7 @@ describe('findNavaidsTool pre-limit totals and truncation disclosure (#11)', () 
     expect(structured.totalCount).toBe(2);
     expect(Object.keys(structured).sort()).toEqual([
       'airportIdent',
+      'dataAsOf',
       'mode',
       'navaids',
       'totalCount',
@@ -440,6 +477,7 @@ describe('findNavaidsTool pre-limit totals and truncation disclosure (#11)', () 
       truncated: true,
       shown: 1,
       cap: 1,
+      dataAsOf: null,
     });
     expect(parsed).toMatchObject({ totalCount: 2, truncated: true, shown: 1, cap: 1 });
   });

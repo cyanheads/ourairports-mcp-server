@@ -1,9 +1,10 @@
 /**
  * @fileoverview ourairports_search_runways — cross-airport runway search. Filters
- * the bundled runway corpus by airport facets (country / region / type) and
- * runway facets (surface / min length / min width / lighting), joined back to
- * airport summaries. Returns flat { airport, runway } rows, one per matching
- * runway — the counterpart to ourairports_get_airport's per-airport runway list.
+ * the bundled runway corpus by airport facets (country / region / type /
+ * scheduled service) and runway facets (surface / min length / min width /
+ * lighting), joined back to airport summaries. Returns flat { airport, runway }
+ * rows, one per matching runway — the counterpart to ourairports_get_airport's
+ * per-airport runway list.
  * @module src/mcp-server/tools/definitions/search-runways.tool
  */
 
@@ -16,6 +17,7 @@ import { pageLimit } from '../page-limit.js';
 import {
   AirportSummarySchema,
   CountryCodeSchema,
+  DataAsOfSchema,
   numOrDash,
   RegionCodeSchema,
   RunwaySchema,
@@ -30,11 +32,12 @@ import {
 
 const runwayPageLimit = pageLimit(100);
 const surfaceFragment = z.string().trim().min(1);
+const orList = new Intl.ListFormat('en', { type: 'disjunction' });
 
 export const searchRunwaysTool = tool('ourairports_search_runways', {
   title: 'Search Runways',
   description:
-    'Search the bundled OurAirports corpus by airport and runway attributes. Returns one row per matching runway, paired with its airport. Supply latitude and longitude together to filter by radius and rank by distance to each parent airport. Surface matches any supplied fragment as a case-insensitive substring of the recorded surface. Lengths describe the full runway surface, including displaced thresholds and overruns. Minimum length and width filters exclude runways missing the corresponding measurement. Closed airports and runways are excluded unless their respective flags are set. Use nextOffset to continue the same query and ourairports_list_countries to find valid country and region codes. OurAirports is community-edited. Consult official sources for flight operations.',
+    'Search the bundled OurAirports corpus by airport and runway attributes. Returns one row per matching runway, paired with its airport. Supply latitude and longitude together to filter by radius and rank by distance to each parent airport. Surface matches any supplied fragment as a case-insensitive substring of the recorded surface. Lengths describe the full runway surface, including displaced thresholds and overruns. Minimum length and width filters exclude runways missing the corresponding measurement. Closed airports and runways are excluded unless their respective flags are set; type closed selects runways at closed airports without the airport flag. Use nextOffset to continue the same query and ourairports_list_countries to find valid country and region codes. OurAirports is community-edited. Consult official sources for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   errors: [
@@ -86,7 +89,13 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       .enum(AIRPORT_TYPES)
       .optional()
       .describe(
-        'Restrict to runways at airports of one type: large_airport, medium_airport, small_airport, heliport, seaplane_base, balloonport, or closed.',
+        'Restrict to runways at airports of one type: large_airport, medium_airport, small_airport, heliport, seaplane_base, balloonport, or closed. closed returns runways at closed airports without include_closed_airports.',
+      ),
+    scheduled_service: z
+      .boolean()
+      .optional()
+      .describe(
+        'Filter by scheduled airline service at the parent airport: true for runways at airports with it, false for runways at airports without. Omit to include both. OurAirports records whether an airport has airline service, not current schedules or routes.',
       ),
     min_length_ft: z
       .number()
@@ -120,7 +129,9 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
     include_closed_airports: z
       .boolean()
       .default(false)
-      .describe('Include runways at airports of type "closed". Off by default.'),
+      .describe(
+        'Include runways at airports of type "closed" alongside the other types. Off by default. type "closed" returns them without this flag.',
+      ),
     include_closed_runways: z
       .boolean()
       .default(false)
@@ -188,6 +199,7 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       .string()
       .optional()
       .describe('Guidance for an empty page, continuation, or a clamped limit.'),
+    dataAsOf: DataAsOfSchema,
   },
 
   enrichmentTrailer: {
@@ -213,6 +225,7 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       ...(input.country && { country: input.country }),
       ...(input.region && { region: input.region }),
       ...(input.type && { type: input.type }),
+      ...(input.scheduled_service !== undefined && { scheduledService: input.scheduled_service }),
       ...(input.surface && { surface: input.surface }),
       ...(input.min_length_ft !== undefined && { minLengthFt: input.min_length_ft }),
       ...(input.min_width_ft !== undefined && { minWidthFt: input.min_width_ft }),
@@ -233,12 +246,17 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       ctx.enrich({ nextOffset });
       notices.push('Use nextOffset as offset with the same query to continue.');
     } else if (result.totalMatched === 0) {
+      const surfaces = typeof input.surface === 'string' ? [input.surface] : input.surface;
       const facets = [
         input.country ? `country=${input.country}` : null,
         input.region ? `region=${input.region}` : null,
         input.type ? `type=${input.type}` : null,
+        input.scheduled_service !== undefined
+          ? `scheduled_service=${input.scheduled_service}`
+          : null,
         input.min_length_ft !== undefined ? `min_length_ft=${input.min_length_ft}` : null,
         input.min_width_ft !== undefined ? `min_width_ft=${input.min_width_ft}` : null,
+        surfaces ? `surface=${surfaces.join(' or ')}` : null,
         input.lighted !== undefined ? `lighted=${input.lighted}` : null,
         spatial
           ? `within ${spatial.radiusKm} km of ${spatial.latitude}, ${spatial.longitude}`
@@ -246,8 +264,33 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       ]
         .filter(Boolean)
         .join(', ');
+      // Only remedies that could add rows: a typed search already decides closed airports.
+      const minimums = [
+        input.min_length_ft !== undefined ? 'min_length_ft' : null,
+        input.min_width_ft !== undefined ? 'min_width_ft' : null,
+      ].filter((name) => name !== null);
+      const dropped = [
+        input.lighted !== undefined ? 'lighted' : null,
+        input.type ? 'type' : null,
+        input.scheduled_service !== undefined ? 'scheduled_service' : null,
+      ].filter((name) => name !== null);
+      const closed = [
+        input.type || input.include_closed_airports ? null : 'airports',
+        input.include_closed_runways ? null : 'runways',
+      ].filter((kind) => kind !== null);
+      const remedies = orList.format(
+        [
+          surfaces ? 'shortening surface fragments' : null,
+          minimums.length > 0 ? `lowering ${orList.format(minimums)}` : null,
+          dropped.length > 0 ? `dropping ${orList.format(dropped)}` : null,
+          spatial && spatial.radiusKm < MAX_RADIUS_KM
+            ? `widening radius_km (max ${MAX_RADIUS_KM})`
+            : null,
+          closed.length > 0 ? `opting in to closed ${orList.format(closed)}` : null,
+        ].filter((remedy) => remedy !== null),
+      );
       notices.push(
-        `No runways matched${facets ? ` ${facets}` : ''}. Relax filters by shortening surface fragments, lowering min_length_ft or min_width_ft, or opting in to closed airports or runways.`,
+        `No runways matched${facets ? ` ${facets}` : ''}.${remedies ? ` Relax filters by ${remedies}.` : ''}`,
       );
     } else if (shown === 0) {
       notices.push(
@@ -255,6 +298,7 @@ export const searchRunwaysTool = tool('ourairports_search_runways', {
       );
     }
     if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
+    ctx.enrich({ dataAsOf: svc.dataAsOf });
 
     return {
       runways: result.matches.map((m) => ({

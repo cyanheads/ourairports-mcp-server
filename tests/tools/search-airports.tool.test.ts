@@ -5,6 +5,7 @@
  * @module tests/tools/search-airports.tool.test
  */
 
+import type { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import {
   createMockContext as createBaseContext,
@@ -300,4 +301,125 @@ describe('searchAirportsTool content rendering', () => {
     const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
     expect(text).toContain('**(\\*)Kasteli Hellenic Air Force Base** (ident GR-0109, id 604508)');
   });
+
+  it.each([
+    // One-word code query: the municipality's airport leads the code-only holder (#38).
+    ['faro', ['BR-0110', 'FARO']],
+    // Padding around a one-word code query keeps the tier and its tie-break (#38).
+    [' palu ', ['CN-0114', 'PALU']],
+    // Name alternative: "st" also matches "saint" names, and the "St." name leads (#34).
+    ['st louis', ['CA-0101', 'CA-0102', 'CA-0103']],
+  ])('renders %s in ranked order on both surfaces', async (query, expected) => {
+    const result = await runToolContract(searchAirportsTool, { query });
+    expect(result.structuredContent).toMatchObject({
+      airports: expected.map((ident) => ({ ident })),
+      totalCount: expected.length,
+    });
+    const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
+    const positions = expected.map((ident) => text.indexOf(`(ident ${ident},`));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+  });
+});
+
+describe('searchAirportsTool closed type and scheduled service (#33, #35)', () => {
+  type Input = z.input<typeof searchAirportsTool.input>;
+  type Structured = Awaited<ReturnType<typeof searchAirportsTool.handler>> & {
+    totalCount: number;
+    nextOffset?: number;
+    notice?: string;
+  };
+  async function call(input: Input) {
+    const result = await runToolContract(searchAirportsTool, input);
+    expect(result.isError).toBeFalsy();
+    const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
+    return { text, structured: result.structuredContent as Structured };
+  }
+
+  it('returns closed airports for type closed whether include_closed is omitted or false', async () => {
+    const opted = await call({ type: 'closed', include_closed: true });
+    expect(opted.structured.totalCount).toBe(6);
+    const inputs: Input[] = [{ type: 'closed' }, { type: 'closed', include_closed: false }];
+    for (const input of inputs) {
+      const { text, structured } = await call(input);
+      expect(structured).toEqual(opted.structured);
+      expect(text).toBe(opted.text);
+      expect(text).toContain('(ident CLOSEDX,');
+    }
+  });
+
+  it.each([
+    [true, 19],
+    [false, 25],
+  ])(
+    'scheduled_service %s keeps only matching open airports on both surfaces',
+    async (scheduled_service, total) => {
+      const { text, structured } = await call({ scheduled_service, limit: 100 });
+      expect(structured.totalCount).toBe(total);
+      expect(structured.airports).toHaveLength(total);
+      expect(structured.airports.every((a) => a.scheduledService === scheduled_service)).toBe(true);
+      expect(structured.airports.some((a) => a.type === 'closed')).toBe(false);
+      const flag = scheduled_service ? 'yes' : 'no';
+      expect(text.split(`**Scheduled service:** ${flag}`)).toHaveLength(total + 1);
+    },
+  );
+
+  it('ANDs scheduled_service with the closed handling and continues with nextOffset', async () => {
+    expect(
+      (await call({ scheduled_service: true, include_closed: true })).structured.totalCount,
+    ).toBe(20);
+    const closed = await call({ type: 'closed', scheduled_service: true });
+    expect(closed.structured).toMatchObject({ airports: [{ ident: 'CN-0119' }], totalCount: 1 });
+    expect(closed.text).toContain('(ident CN-0119,');
+    const first = await call({ scheduled_service: true, country: 'CA', limit: 3 });
+    expect(first.structured).toMatchObject({ totalCount: 6, nextOffset: 3 });
+    const rest = await call({ scheduled_service: true, country: 'CA', limit: 3, offset: 3 });
+    const idents = [...first.structured.airports, ...rest.structured.airports].map((a) => a.ident);
+    expect(new Set(idents).size).toBe(6);
+    expect(rest.structured).not.toHaveProperty('nextOffset');
+  });
+
+  it('rejects a non-boolean scheduled_service at argument validation', async () => {
+    const input = { scheduled_service: 'yes' } as unknown as Input;
+    const result = await runToolContract(searchAirportsTool, input);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(JSON.stringify(result.content)).toContain('scheduled_service');
+  });
+
+  it.each<[Input, string]>([
+    [
+      { query: 'zzznotaplace' },
+      'No airports matched "zzznotaplace". Broaden the query or set include_closed if you expect a closed field. If you have an airport code, try ourairports_get_airport.',
+    ],
+    [
+      { country: 'PN', scheduled_service: true },
+      'No airports matched with country=PN, scheduled_service=true. Relax facets, verify country/region codes with ourairports_list_countries, or set include_closed if you expect a closed field.',
+    ],
+    [
+      { type: 'closed', country: 'SB' },
+      'No airports matched with country=SB, type=closed. Relax facets or verify country/region codes with ourairports_list_countries.',
+    ],
+    [
+      { type: 'balloonport', include_closed: true },
+      'No airports matched with type=balloonport. Relax facets.',
+    ],
+    [
+      { query: 'zzznotaplace', country: 'US', include_closed: true },
+      'No airports matched "zzznotaplace" with country=US. Broaden the query, relax facets, or verify country/region codes with ourairports_list_countries. If you have an airport code, try ourairports_get_airport.',
+    ],
+    [
+      { query: 'zzznotaplace', region: 'US-WA' },
+      'No airports matched "zzznotaplace" with region=US-WA. Broaden the query, relax facets, verify country/region codes with ourairports_list_countries, or set include_closed if you expect a closed field. If you have an airport code, try ourairports_get_airport.',
+    ],
+  ])(
+    'names the filters set and only remedies that could add rows for %j',
+    async (input, notice) => {
+      const { text, structured } = await call(input);
+      expect(structured).toMatchObject({ airports: [], totalCount: 0, notice });
+      expect(text).toContain(`> ${notice}`);
+    },
+  );
 });

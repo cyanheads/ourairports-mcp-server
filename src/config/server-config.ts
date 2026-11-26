@@ -15,7 +15,7 @@ const ServerConfigSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Directory holding the six OurAirports CSV files. Defaults to the bundled `data/` directory inside the package. Overridable to point at a fresher local data drop.',
+      'Directory holding the six OurAirports CSV files and their `snapshot.json` provenance record. Defaults to the bundled `data/` directory inside the package. Overridable to point at a fresher local data drop; a drop without `snapshot.json` reports `dataAsOf: null`.',
     ),
   defaultSearchLimit: z.coerce
     .number()

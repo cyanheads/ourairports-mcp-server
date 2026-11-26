@@ -58,30 +58,35 @@ The [OurAirports guide](./skills/ourairports-guide/SKILL.md) covers ambiguous co
 
 ## Capability reference
 
-The four search/find tools accept `offset` (default 0). When more rows remain, pass `nextOffset` as the next request's `offset`, keeping the query and data snapshot unchanged. `totalCount` counts all filtered matches; `truncated`, `shown`, and `cap` describe a page with more results after it. A past-end page is empty but retains its total.
+Every tool result carries `dataAsOf`: when the bundled OurAirports data was published (ISO 8601 UTC), or `null` when the data directory has no snapshot record. It changes only when the data is refreshed. `airport://{code}` carries it too.
+
+The four search/find tools accept `offset` (default 0). When more rows remain, pass `nextOffset` as the next request's `offset`, keeping the query unchanged; if `dataAsOf` differs from the first page's, the data was refreshed, so restart from offset 0. `totalCount` counts all filtered matches; `truncated`, `shown`, and `cap` describe a page with more results after it. A past-end page is empty but retains its total.
 
 Page ceilings are 100 rows for search and 50 for find. Explicit positive integer limits above the ceiling clamp with a notice, request log, and counter increment. Set `OURAIRPORTS_CLAMP_LIMITS=false` to restore strict rejection. Omitted limits use `OURAIRPORTS_DEFAULT_SEARCH_LIMIT` (20), bounded by the tool's ceiling.
 
 ### `ourairports_search_airports` <sub>tool</sub>
 
 - Free-text search over name, municipality, and keywords; tokens are AND-matched (word order and partial words handled)
-- Exact codes match across IATA, ICAO, GPS, local code, and ident; a code-only query ranks its holders before incidental text matches. Hyphenated codes match whole. Name tokens also accept `intl`, `rgnl`, `muni`, `fld`, and `mem` alongside their full spellings. Stopword-only or punctuation-only queries retain their no-searchable-terms result; use `ourairports_get_airport` for an explicit code
-- Faceted filters: `country` (two letters), `region` (two letters followed by one or two hyphen-separated segments of 1–3 letters/digits), and `type`. Codes are case-insensitive with surrounding whitespace ignored; literal `""` is unset, whitespace-only is invalid. Malformed codes fail argument validation; codes absent from the bundled tables raise `unknown_country` / `unknown_region` with discovery guidance. Valid codes with no matching airports remain empty successes
-- Closed airports excluded by default; opt in with `include_closed`
-- Results carry the full code set, coordinates, and recorded keywords for chaining into `ourairports_get_airport`; operational/larger-airport ranking applies within the code-match tier
+- Exact codes match across IATA, ICAO, GPS, local code, and ident; hyphenated codes match whole. A query that is one exact code leads with its holders and the airports whose municipality is that word; airports that only carry it in their name rank after them. Name tokens also accept `intl`, `rgnl`, `muni`, `fld`, `mem`, `ft`, and `mt` alongside their full spellings, and `st`/`saint` and `ste`/`sainte` in both directions; the typed form keeps matching too. Letters such as ł, ø, and ß fold to ASCII, so `lodz` finds Łódź. Stopword-only or punctuation-only queries retain their no-searchable-terms result; use `ourairports_get_airport` for an explicit code
+- Faceted filters: `country` (two letters), `region` (two letters followed by one or two hyphen-separated segments of 1–3 letters/digits), `type`, and `scheduled_service`. Codes are case-insensitive with surrounding whitespace ignored; literal `""` is unset, whitespace-only is invalid. Malformed codes fail argument validation; codes absent from the bundled tables raise `unknown_country` / `unknown_region` with discovery guidance. Valid codes with no matching airports remain empty successes
+- `scheduled_service` keeps airports with (`true`) or without (`false`) scheduled airline service; omit it for both. OurAirports records airline service at the field, not current schedules or routes
+- Closed airports excluded by default; opt in with `include_closed`, or set `type` to `closed` to select only closed airports
+- An empty result's notice names the filters set and suggests only changes that could add rows
+- Results carry the full code set, coordinates, and recorded keywords for chaining into `ourairports_get_airport`. Ranking weighs an IATA match, airport type and scheduled service, and the query's words appearing in order in the airport name; within the code tier, a municipality holder wins a tie against a code-only holder
 
 ---
 
 ### `ourairports_search_runways` <sub>tool</sub>
 
-- Airport facets (`country`, `region`, `type`) narrow the airports first; runway facets (`surface`, `min_length_ft`, `min_width_ft`, `lighted`) then filter their runways
+- Airport facets (`country`, `region`, `type`, `scheduled_service`) narrow the airports first; runway facets (`surface`, `min_length_ft`, `min_width_ft`, `lighted`) then filter their runways
 - Country/region facets follow the same shape, empty-string, normalization, and bundled-membership rules as `ourairports_search_airports`; valid empty selections remain successful
 - `surface` accepts a case-insensitive substring or a nonempty array of substrings matched with OR. Raw values have no controlled vocabulary: `asp` matches ASP, ASPH, and Asphalt; `con` and `pem` cover other recorded surfaces
 - Optional `latitude` + `longitude` ranks qualifying runways by the parent airport's coordinates, with `radius_km` from 1–20,016 (default 100). Both coordinates are required together; a radius alone is invalid
 - Returns one flat `{ airport, runway, distanceKm, bearingDeg }` row per matching runway — an airport with three matching runways contributes three rows. Distance and bearing are `null` without coordinates; rows then retain dataset traversal order
 - `lengthFt` and `min_length_ft` are the full runway surface as OurAirports records it, including displaced thresholds and overruns — not usable takeoff or landing distance; each runway also carries `leDisplacedThresholdFt` / `heDisplacedThresholdFt` (`null` when none is recorded)
 - A runway whose length or width is unknown is excluded when the matching `min_*_ft` filter is set — never assumed to meet a threshold the data can't confirm
-- Closed airports and closed runways are both excluded unless `include_closed_airports` / `include_closed_runways` is set
+- Closed airports and closed runways are both excluded unless `include_closed_airports` / `include_closed_runways` is set; `type: closed` selects runways at closed airports without the airport flag, while closed runways still need theirs
+- An empty result's notice names the filters set, `surface` included, and suggests only changes that could add rows
 - Each runway also carries its end-center coordinates and elevation above mean sea level, distinct from displaced thresholds
 
 ---
@@ -101,22 +106,22 @@ Page ceilings are 100 rows for search and 50 for find. Explicit positive integer
 ### `ourairports_find_airports` <sub>tool</sub>
 
 - Great-circle (haversine) ranking, nearest-first, each result with `distanceKm` and `bearingDeg` (degrees true) from the query point
-- `radius_km` (1–20,016, default 100); optional `type` filter; `include_closed` opt-in
+- `radius_km` (1–20,016, default 100); optional `type` and `scheduled_service` filters; `include_closed` opt-in, which `type: closed` does not need
 - Coordinate in, ranked airports out — no geocoding; resolve place names to lat/lon upstream first
 - `totalCount` is the filtered in-radius count before paging; `nextOffset` reaches farther results
-- Empty-radius guidance suggests a wider radius only below the global ceiling
+- Empty-radius guidance names the filters set and suggests only changes that could add rows: a wider radius below the global ceiling, dropping a filter, or the closed opt-in for an untyped search
 
 ---
 
 ### `ourairports_find_navaids` <sub>tool</sub>
 
 - **Coordinate mode:** `latitude` + `longitude` (+ optional `radius_km`, 1–20,016, default 100) ranks navaids nearest-first with distance and bearing
-- **Airport mode:** `airport_code` returns the navaids serving that airport
+- **Airport mode:** `airport_code` returns the navaids serving that airport in dataset order, with distance and bearing from the airport reference point
 - **Ident mode:** `ident` matches an exact navaid code, case-insensitively after trimming, and returns all holders in dataset order, including navaids without an associated airport. `type` can narrow shared idents
 - Exactly one complete mode required — overlapping modes, no mode, or incomplete coordinates raise `mode_conflict`; incomplete-coordinate messages name the missing counterpart
 - `frequencyKhz` is the stored value for every type (a VOR on 114.5 MHz reads 114500); `frequencyMhz` carries the VHF frequency of a VOR or VOR-DME and the paired VHF frequency of a DME, TACAN, or VORTAC, and is `null` for NDB and NDB-DME, which tune in kHz; an upstream `-1` placeholder reads as `null`
 - Each navaid carries its service-volume metadata as recorded upstream: `usageType` (HI, LO, BOTH, TERMINAL, RNAV), `power`, `magneticVariationDeg` (actual, positive east), `slavedVariationDeg` (the variation built into the radials), and `dmeFrequencyKhz` (the DME's paired VHF frequency) — `null` where the dataset has no value
-- `totalCount` is the match count before paging in every mode. Non-coordinate results have null distance and bearing; `airportIdent` is populated only in airport mode
+- `totalCount` is the match count before paging in every mode. Ident-mode results have null distance and bearing; `airportIdent` is populated only in airport mode
 - Airport mode distinguishes "airport not found" (`unknown_code` error) from "airport found but has no associated navaids" (empty list with a note)
 - Airport mode adds a `resolutionNote` when `airport_code` is also a code of other airports, naming them by ident — the same note `ourairports_get_airport` returns
 
@@ -191,7 +196,7 @@ The package and Docker image include the dataset. For Docker or a source build, 
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `OURAIRPORTS_DATA_DIR` | Directory holding the six OurAirports CSV files. Overridable to point at a fresher local data drop. | Bundled `data/` |
+| `OURAIRPORTS_DATA_DIR` | Directory holding the six OurAirports CSV files and `snapshot.json`. Overridable to point at a fresher local data drop; without `snapshot.json`, results report `dataAsOf: null`. | Bundled `data/` |
 | `OURAIRPORTS_DEFAULT_SEARCH_LIMIT` | Default result cap for the search/find tools when the caller omits `limit` (1–100). | `20` |
 | `OURAIRPORTS_CLAMP_LIMITS` | Clamp explicit limits above each tool's page ceiling; `false` restores strict rejection. | `true` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
@@ -250,7 +255,7 @@ The image serves stateless HTTP at `http://localhost:3010/mcp` and logs to `/var
 
 ### Refreshing the data
 
-Run `bun run build:data` and rebuild to pick up the latest daily CSV snapshot. The build validates country and region codes and airport references before writing the bundle. Use `bun run build:data --check` to validate an existing bundle, or set `OURAIRPORTS_DATA_DIR` to use a local data drop without rebuilding.
+Run `bun run build:data` and rebuild to pick up the latest daily CSV snapshot. The build validates country and region codes and airport references, then writes the bundle with `data/snapshot.json`, which records the mirror's publication time (`sourceLastModified`, served as `dataAsOf`) and the fetch time (`fetchedAt`). A fetch whose files' publication times span more than ten minutes mixed two mirror deploys and is refused; run it again. Use `bun run build:data --check` to validate an existing bundle, `snapshot.json` included (publishing runs it), or set `OURAIRPORTS_DATA_DIR` to use a local data drop without rebuilding.
 
 ## Project structure
 

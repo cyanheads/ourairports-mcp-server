@@ -6,16 +6,42 @@
  * @module tests/services/airport-data-service.test
  */
 
-import { beforeAll, describe, expect, it } from 'vitest';
-import type { AirportDataService } from '@/services/airport-data/airport-data-service.js';
-import { haversineKm, nearest } from '@/services/airport-data/geo.js';
-import { loadFixtureService } from '../fixtures/load.js';
+import { appendFile, cp, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AirportDataService } from '@/services/airport-data/airport-data-service.js';
+import { forEachRow } from '@/services/airport-data/csv.js';
+import { haversineKm, MAX_RADIUS_KM, nearest } from '@/services/airport-data/geo.js';
+import type { AirportFacets } from '@/services/airport-data/types.js';
+import { FIXTURE_DATA_DIR, loadFixtureService } from '../fixtures/load.js';
 
 let svc: AirportDataService;
 
 beforeAll(async () => {
   svc = await loadFixtureService();
 });
+
+/**
+ * Call inside a `describe`: loads a temp copy of the fixture data with `rows`
+ * appended to airports.csv, so a test can add airports without moving the counts
+ * other tests assert on the fixture, and removes the copy afterwards.
+ */
+function withExtraAirports(rows: string[]) {
+  let extended: AirportDataService;
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ourairports-extra-airports-'));
+    await cp(FIXTURE_DATA_DIR, dir, { recursive: true });
+    await appendFile(join(dir, 'airports.csv'), rows.map((row) => `${row}\n`).join(''));
+    extended = new AirportDataService(dir);
+    await extended.load();
+  });
+  afterAll(() => rm(dir, { recursive: true, force: true }));
+
+  const search = (query: string) => extended.search({ query, includeClosed: false, limit: 20 });
+  return { search, idents: (query: string) => search(query).airports.map((a) => a.ident) };
+}
 
 describe('CSV parsing by header name', () => {
   it('parses an airport with full code set (KSEA)', () => {
@@ -171,9 +197,13 @@ describe('runway and frequency joins', () => {
 });
 
 describe('nearbyAirports (haversine)', () => {
+  const open = { includeClosed: false };
+  const withClosed = { includeClosed: true };
+  const large = { type: 'large_airport', includeClosed: false };
+
   it('ranks nearest-first and computes distance/bearing', () => {
     // Near Seattle — KSEA and KBFI are ~7 km apart.
-    const { airports: hits } = svc.nearbyAirports(47.45, -122.31, 100, 10, undefined, false);
+    const { airports: hits } = svc.nearbyAirports(47.45, -122.31, 100, 10, open);
     expect(hits.length).toBeGreaterThanOrEqual(2);
     expect(hits[0]?.airport.ident).toBe('KSEA');
     expect(hits[0]?.distanceKm).toBeLessThan(hits[1]?.distanceKm as number);
@@ -182,28 +212,185 @@ describe('nearbyAirports (haversine)', () => {
   });
 
   it('excludes closed airports by default and includes them on opt-in', () => {
-    const withoutClosed = svc.nearbyAirports(47.5, -122.4, 50, 50, undefined, false);
+    const withoutClosed = svc.nearbyAirports(47.5, -122.4, 50, 50, open);
     expect(withoutClosed.airports.some((h) => h.airport.type === 'closed')).toBe(false);
-    const withClosed = svc.nearbyAirports(47.5, -122.4, 50, 50, undefined, true);
-    expect(withClosed.airports.some((h) => h.airport.ident === 'CLOSEDX')).toBe(true);
+    const included = svc.nearbyAirports(47.5, -122.4, 50, 50, withClosed);
+    expect(included.airports.some((h) => h.airport.ident === 'CLOSEDX')).toBe(true);
   });
 
   it('respects the radius and the type filter', () => {
-    const far = svc.nearbyAirports(0, 0, 100, 10, undefined, false);
+    const far = svc.nearbyAirports(0, 0, 100, 10, open);
     expect(far).toEqual({ airports: [], totalMatched: 0 });
-    const onlyLarge = svc.nearbyAirports(47.45, -122.31, 200, 10, 'large_airport', false);
+    const onlyLarge = svc.nearbyAirports(47.45, -122.31, 200, 10, large);
     expect(onlyLarge.airports.every((h) => h.airport.type === 'large_airport')).toBe(true);
   });
 
   it('reports the filtered in-radius total before the limit (#11)', () => {
-    const capped = svc.nearbyAirports(47.45, -122.31, 100, 1, undefined, false);
+    const capped = svc.nearbyAirports(47.45, -122.31, 100, 1, open);
     expect(capped.airports.map((h) => h.airport.ident)).toEqual(['KSEA']);
     expect(capped.totalMatched).toBe(2);
-    expect(svc.nearbyAirports(47.45, -122.31, 100, 1, undefined, true).totalMatched).toBe(3);
-    expect(svc.nearbyAirports(47.45, -122.31, 100, 1, 'large_airport', false).totalMatched).toBe(1);
-    const all = svc.nearbyAirports(47.45, -122.31, 100, 2, undefined, false);
+    expect(svc.nearbyAirports(47.45, -122.31, 100, 1, withClosed).totalMatched).toBe(3);
+    expect(svc.nearbyAirports(47.45, -122.31, 100, 1, large).totalMatched).toBe(1);
+    const all = svc.nearbyAirports(47.45, -122.31, 100, 2, open);
     expect(all.airports).toHaveLength(2);
     expect(all.totalMatched).toBe(2);
+  });
+});
+
+describe('airport facets shared by search, runway search, and the nearby scan (#33, #35)', () => {
+  type Row = { ident: string; type: string; scheduled: boolean };
+  const airports: Row[] = [];
+  const runwayIds = new Map<string, number[]>();
+
+  beforeAll(async () => {
+    forEachRow(await readFile(join(FIXTURE_DATA_DIR, 'airports.csv'), 'utf-8'), (r) => {
+      airports.push({
+        ident: r.get('ident'),
+        type: r.get('type'),
+        scheduled: r.get('scheduled_service') === 'yes',
+      });
+    });
+    forEachRow(await readFile(join(FIXTURE_DATA_DIR, 'runways.csv'), 'utf-8'), (r) => {
+      const ids = runwayIds.get(r.get('airport_ident')) ?? [];
+      ids.push(Number(r.get('id')));
+      runwayIds.set(r.get('airport_ident'), ids);
+    });
+  });
+
+  const grid: AirportFacets[] = [undefined, 'closed', 'medium_airport'].flatMap((type) =>
+    [false, true].flatMap((includeClosed) =>
+      [undefined, true, false].map((scheduledService) => ({
+        includeClosed,
+        ...(type && { type }),
+        ...(scheduledService !== undefined && { scheduledService }),
+      })),
+    ),
+  );
+
+  it.each(grid)('selects the same airports in all three scans for %j', (facets) => {
+    const expected = airports
+      .filter(
+        (a) =>
+          (facets.type ? a.type === facets.type : facets.includeClosed || a.type !== 'closed') &&
+          (facets.scheduledService === undefined || a.scheduled === facets.scheduledService),
+      )
+      .map((a) => a.ident)
+      .sort();
+
+    const found = svc.search({ ...facets, limit: 100 });
+    expect(found.airports.map((a) => a.ident).sort()).toEqual(expected);
+    expect(found.totalMatched).toBe(expected.length);
+
+    const near = svc.nearbyAirports(0, 0, MAX_RADIUS_KM, 100, facets);
+    expect(near.airports.map((h) => h.airport.ident).sort()).toEqual(expected);
+    expect(near.totalMatched).toBe(expected.length);
+
+    const { includeClosed, ...airportFacets } = facets;
+    const runways = svc.searchRunways({
+      ...airportFacets,
+      includeClosedAirports: includeClosed,
+      includeClosedRunways: true,
+      limit: 100,
+    });
+    const byId = (a: number, b: number) => a - b;
+    expect(runways.matches.map((m) => m.runway.id).sort(byId)).toEqual(
+      expected.flatMap((ident) => runwayIds.get(ident) ?? []).sort(byId),
+    );
+  });
+
+  it('type closed returns the closed airports with includeClosed false or true (#33)', () => {
+    const closed = (includeClosed: boolean) =>
+      svc.search({ type: 'closed', includeClosed, limit: 100 });
+    expect(closed(false)).toEqual(closed(true));
+    expect(closed(false).airports.map((a) => a.ident)).toEqual([
+      'CN-0119',
+      'LGTL',
+      'CA-1094',
+      'CLOSEDX',
+      'TIE-A',
+      'TIE-B',
+    ]);
+    const runways = (includeClosedAirports: boolean) =>
+      svc
+        .searchRunways({
+          type: 'closed',
+          includeClosedAirports,
+          includeClosedRunways: false,
+          limit: 100,
+        })
+        .matches.map((m) => m.runway.id);
+    expect(runways(false)).toEqual([245683, 249263]);
+    expect(runways(true)).toEqual(runways(false));
+    const near = svc.nearbyAirports(32.7, 108.9, 50, 10, { type: 'closed', includeClosed: false });
+    expect(near.airports.map((h) => h.airport.ident)).toEqual(['CN-0119']);
+  });
+
+  it('keeps closed runways out of a type closed runway search until includeClosedRunways (#33)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ourairports-closed-runway-'));
+    try {
+      await cp(FIXTURE_DATA_DIR, dir, { recursive: true });
+      await appendFile(
+        join(dir, 'runways.csv'),
+        '990201,990119,"CN-0119",8000,150,"CON",1,1,"07",,,,,,"25",,,,,\n',
+      );
+      const withClosedRunway = new AirportDataService(dir);
+      await withClosedRunway.load();
+      const ids = (includeClosedRunways: boolean) =>
+        withClosedRunway
+          .searchRunways({
+            type: 'closed',
+            includeClosedAirports: false,
+            includeClosedRunways,
+            limit: 100,
+          })
+          .matches.map((m) => m.runway.id);
+      expect(ids(false)).toEqual([245683, 249263]);
+      expect(ids(true)).toEqual([245683, 249263, 990201]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('scheduledService splits the open airports and keeps the closed exclusion (#35)', () => {
+    const total = (facets: AirportFacets) => svc.search({ ...facets, limit: 1 }).totalMatched;
+    expect(total({ includeClosed: false })).toBe(44);
+    expect(total({ includeClosed: false, scheduledService: true })).toBe(19);
+    expect(total({ includeClosed: false, scheduledService: false })).toBe(25);
+    expect(total({ includeClosed: true, scheduledService: true })).toBe(20);
+    const closedScheduled = svc.search({
+      type: 'closed',
+      includeClosed: false,
+      scheduledService: true,
+      limit: 10,
+    });
+    expect(closedScheduled.airports.map((a) => a.ident)).toEqual(['CN-0119']);
+    const near = (facets: AirportFacets) =>
+      svc.nearbyAirports(32.7, 108.9, 50, 10, facets).airports.map((h) => h.airport.ident);
+    expect(near({ includeClosed: false, scheduledService: true })).toEqual(['ZLAK', 'CN-0114']);
+    expect(near({ includeClosed: true, scheduledService: true })).toEqual([
+      'CN-0119',
+      'ZLAK',
+      'CN-0114',
+    ]);
+    expect(near({ includeClosed: false, scheduledService: false })).toEqual(['CN-0118']);
+  });
+
+  it('pages a scheduledService selection without duplicates or skips (#35)', () => {
+    const facets: AirportFacets = { includeClosed: true, scheduledService: true };
+    const full = svc.search({ ...facets, limit: 100 });
+    const paged = Array.from({ length: full.totalMatched + 1 }, (_, offset) =>
+      svc.search({ ...facets, limit: 1, offset }).airports.map((a) => a.ident),
+    ).flat();
+    expect(paged).toEqual(full.airports.map((a) => a.ident));
+
+    const near = (limit: number, offset: number) =>
+      svc.nearbyAirports(32.7, 108.9, MAX_RADIUS_KM, limit, facets, offset);
+    const fullNear = near(100, 0);
+    const pagedNear = Array.from({ length: fullNear.totalMatched + 1 }, (_, offset) =>
+      near(1, offset).airports.map((h) => h.airport.ident),
+    ).flat();
+    expect(fullNear.totalMatched).toBe(20);
+    expect(pagedNear).toEqual(fullNear.airports.map((h) => h.airport.ident));
   });
 });
 
@@ -457,6 +644,167 @@ describe('search', () => {
     const blank = svc.search({ query: '   ', includeClosed: false, limit: 20 });
     expect(blank.totalMatched).toBeGreaterThan(1);
     expect(blank.noSearchableTerms).toBeUndefined();
+  });
+});
+
+describe('search name alternatives and name boost (#34)', () => {
+  const idents = (query: string, limit = 20) =>
+    svc.search({ query, includeClosed: false, limit }).airports.map((a) => a.ident);
+
+  it.each([
+    // A "St." name leads a keyword-only "st" match that sorts first alphabetically.
+    ['st louis', ['CA-0101', 'CA-0102', 'CA-0103']],
+    ['saint louis', ['CA-0101', 'CA-0103']],
+    ['ft mcmurray', ['CA-0104', 'CA-0105']],
+    ['sault sainte marie', ['CA-0108']],
+    // The whole-name match (+30) outranks a larger scheduled airport with no name boost here.
+    ['saint louis airport', ['CA-0103', 'CA-0101']],
+    // Only the last query token may match as a forward prefix: "fo" earns CA-0104 no
+    // boost, so the score tie falls to the name.
+    ['fo mcmurray', ['CA-0105', 'CA-0104']],
+    // A last-token prefix earns the consecutive-token boost (+10), never the whole-name one.
+    ['saint louis airp', ['CA-0101', 'CA-0103']],
+  ])('ranks %s as %j', (query, expected) => {
+    expect(idents(query)).toEqual(expected);
+  });
+
+  it('adds alternatives without removing literal matches', () => {
+    const set = (query: string) => new Set(idents(query, 100));
+    expect(set('ft mcmurray')).toEqual(set('fort mcmurray'));
+    expect(set('mt pleasant')).toEqual(new Set(['CA-0106', 'CA-0107']));
+    // ft and mt are one-way: the full spelling keeps its literal matches only.
+    expect(set('mount pleasant')).toEqual(new Set(['CA-0106']));
+    expect(set('fort')).toEqual(new Set(['CA-0104', 'CA-0105']));
+    // A literal token keeps its forward prefix beside the alternative.
+    expect(set('st')).toContain('CA-0102');
+    expect(set('sault ste marie')).toEqual(new Set(['CA-0108']));
+  });
+
+  it('boosts name tokens and forward prefixes, never a mid-word substring', () => {
+    // "field" is inside "Bauerfield" but is not one of its name tokens.
+    expect(idents('field', 2)).toEqual(['KBFI', 'PG-0109']);
+    // "mcmur" prefixes a name token of CA-0104 and only the municipality of CA-0105.
+    expect(idents('mcmur')).toEqual(['CA-0104', 'CA-0105']);
+  });
+
+  describe('with a name spelled "Sainte"', () => {
+    const extra = withExtraAirports([
+      '990140,"CA-0140","small_airport","Sainte Anne Airport",46.9,-71.3,240,"NA","CA","CA-QC","Sainte-Anne","no",,,,,,,',
+    ]);
+
+    it('reaches it through ste as well as sainte', () => {
+      expect(extra.idents('ste anne')).toEqual(['CA-0140']);
+      expect(extra.idents('sainte anne')).toEqual(['CA-0140']);
+    });
+  });
+});
+
+describe('search one-word code tier (#38)', () => {
+  const search = (query: string) => svc.search({ query, includeClosed: false, limit: 20 });
+
+  it.each([
+    // The municipality's airport outranks a smaller code-only holder.
+    ['faro', ['BR-0110', 'FARO'], 2],
+    // Equal scores: the municipality holder wins the tie against the ICAO holder.
+    ['palu', ['CN-0114', 'PALU'], 2],
+    // The IATA holder keeps the lead over municipality holders.
+    ['del', ['VIDP', 'AR-0115', 'LELN'], 3],
+    // A name-only token stays outside the tier.
+    ['gago', ['GAGO', 'BR-0110'], 2],
+  ])('ranks %s as %j with every match counted', (query, expected, total) => {
+    const result = search(query);
+    expect(result.airports.map((a) => a.ident)).toEqual(expected);
+    expect(result.totalMatched).toBe(total);
+  });
+
+  it.each([' palu', 'palu ', ' palu '])(
+    'keeps the tier for the padded one-word code query %j',
+    (query) => {
+      const result = search(query);
+      expect(result.airports.map((a) => a.ident)).toEqual(['CN-0114', 'PALU']);
+      expect(result.totalMatched).toBe(2);
+    },
+  );
+
+  it.each([
+    // A code word beside a text word: with no tier, the larger scheduled airport leads
+    // the code holder that leads the one-word query.
+    ['faro airport', ['BR-0110', 'FARO']],
+    ['gago airport', ['BR-0110', 'GAGO']],
+    // A code holder still needs every other word.
+    ['faro gago', ['BR-0110']],
+    ['jfk kennedy', ['KJFK']],
+  ])('ranks the multi-word query %s as %j, outside the tier', (query, expected) => {
+    expect(search(query).airports.map((a) => a.ident)).toEqual(expected);
+  });
+
+  describe('with an airport whose municipality only starts with the code word', () => {
+    // Medium with scheduled service, it ties both tier members on score, so only
+    // tier membership decides its place.
+    const extra = withExtraAirports([
+      '990120,"CN-0120","medium_airport","Occidental Airport",32.6,108.7,300,"AS","CN","CN-61","Paluan","yes",,,,,,,',
+    ]);
+
+    it('matches it by prefix but keeps it outside the tier', () => {
+      const result = extra.search('palu');
+      expect(result.airports.map((a) => a.ident)).toEqual(['CN-0114', 'PALU', 'CN-0120']);
+      expect(result.totalMatched).toBe(3);
+    });
+  });
+});
+
+describe('search tokenizer folds Latin letters NFKD leaves whole', () => {
+  const idents = (query: string) =>
+    svc.search({ query, includeClosed: false, limit: 20 }).airports.map((a) => a.ident);
+
+  it.each([
+    ['lodz', ['GR-0116']],
+    ['ŁÓDŹ', ['GR-0116']],
+    ['wladyslaw reymont', ['GR-0116']],
+    ['rost', ['GR-0117']],
+    ['røst', ['GR-0117']],
+    // № decomposes to "No"; its capital letter survives the strip.
+    ['no 1', ['CN-0118']],
+  ])('matches %s whole', (query, expected) => {
+    expect(idents(query)).toEqual(expected);
+  });
+
+  it('no longer matches word fragments split at a folded letter', () => {
+    expect(idents('st')).not.toContain('GR-0117');
+    expect(idents('adys')).toEqual([]);
+  });
+
+  describe('every folded letter', () => {
+    /**
+     * One airport per folded letter: its name, the name word folded to ASCII, and the
+     * fragment after the letter, which an unfolded letter would split into a token.
+     */
+    const FOLDS: [letter: string, ident: string, name: string, word: string, fragment: string][] = [
+      ['æ', 'FOLD-AE', 'Kværndrup', 'kvaerndrup', 'rndrup'],
+      ['đ', 'FOLD-D', 'Međugorje', 'medugorje', 'ugorje'],
+      ['ð', 'FOLD-ETH', 'Sauðárkrókur', 'saudarkrokur', 'arkrokur'],
+      ['ħ', 'FOLD-H', 'Għajnsielem', 'ghajnsielem', 'ajnsielem'],
+      ['ı', 'FOLD-I', 'Kırşehir', 'kirsehir', 'rsehir'],
+      ['ł', 'FOLD-L', 'Białystok', 'bialystok', 'ystok'],
+      ['ø', 'FOLD-O', 'Sørkjosen', 'sorkjosen', 'rkjosen'],
+      ['œ', 'FOLD-OE', 'Rœschwoog', 'roeschwoog', 'schwoog'],
+      ['ß', 'FOLD-SS', 'Großenhain', 'grossenhain', 'enhain'],
+      ['þ', 'FOLD-TH', 'Þingeyri', 'thingeyri', 'ingeyri'],
+      ['ŧ', 'FOLD-T', 'Vuoŧŧasjávri', 'vuottasjavri', 'asjavri'],
+      ['ə', 'FOLD-E', 'Mingəçevir', 'mingecevir', 'cevir'],
+      ['ᵫ', 'FOLD-UE', 'Grᵫnfeld', 'gruenfeld', 'nfeld'],
+    ];
+    const extra = withExtraAirports(
+      FOLDS.map(
+        ([, ident, name], i) =>
+          `${990150 + i},"${ident}","small_airport","${name} Airport",35.3,25.4,100,"EU","GR","GR-M",,"no",,,,,,,`,
+      ),
+    );
+
+    it.each(FOLDS)('folds %s inside its word (%s)', (_letter, ident, _name, word, fragment) => {
+      expect(extra.idents(word)).toEqual([ident]);
+      expect(extra.idents(fragment)).toEqual([]);
+    });
   });
 });
 

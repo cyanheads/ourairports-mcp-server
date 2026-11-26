@@ -12,6 +12,7 @@ import { getAirportDataService } from '@/services/airport-data/airport-data-serv
 import {
   AirportDetailSchema,
   buildResolutionNote,
+  DataAsOfSchema,
   escapeMarkdown,
   FrequencySchema,
   numOrDash,
@@ -88,6 +89,10 @@ export const getAirportTool = tool('ourairports_get_airport', {
       ),
   }),
 
+  enrichment: {
+    dataAsOf: DataAsOfSchema,
+  },
+
   handler(input, ctx) {
     const svc = getAirportDataService();
     const resolution = svc.resolveByCode(input.code);
@@ -111,6 +116,7 @@ export const getAirportTool = tool('ourairports_get_airport', {
     if (wantRunways) included.push('runways');
     if (wantFrequencies) included.push('frequencies');
 
+    ctx.enrich({ dataAsOf: svc.dataAsOf });
     return {
       airport: toAirportDetail(airport, country?.name, region?.name),
       resolvedVia,

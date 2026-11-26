@@ -1,11 +1,15 @@
 /**
  * @fileoverview Tests for the airport://{code} resource — code resolution,
  * inline runways/frequencies with displaced thresholds, the shared-code
- * resolution note (identical to ourairports_get_airport), and the unknown_code error.
+ * resolution note and snapshot dataAsOf (identical to ourairports_get_airport),
+ * and the unknown_code error.
  * @module tests/resources/airport.resource.test
  */
 
-import { createMockContext as createBaseMockContext } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createMockContext as createBaseMockContext,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { loadFixtureService } from '../fixtures/load.js';
 
@@ -88,6 +92,13 @@ describe('airportResource runway thresholds and resolution note', () => {
 
   it('keeps the plain note for a code on one airport (KSEA)', async () => {
     expect((await read('KSEA')).resolutionNote).toBe('Resolved via ident.');
+  });
+
+  it('carries the snapshot dataAsOf, the same value ourairports_get_airport returns', async () => {
+    const record = await read('KSEA');
+    expect(record.dataAsOf).toBe('2026-11-25T02:53:49.000Z');
+    const tool = await runToolContract(getAirportTool, { code: 'KSEA' });
+    expect(tool.structuredContent).toHaveProperty('dataAsOf', record.dataAsOf);
   });
 
   it.each(['GIG', 'HBE', 'HBI', 'AKA', 'LGTL', '5MO', '1A8', 'ERT', 'SEA'])(

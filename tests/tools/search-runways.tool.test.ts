@@ -334,3 +334,119 @@ describe('searchRunwaysTool content and displaced thresholds', () => {
     expect(searchRunwaysTool.input.shape.min_length_ft.description).toMatch(/displaced thresholds/);
   });
 });
+
+describe('searchRunwaysTool closed type and scheduled service (#33, #35)', () => {
+  type Input = z.input<typeof searchRunwaysTool.input>;
+  type Structured = Awaited<ReturnType<typeof searchRunwaysTool.handler>> & {
+    totalCount: number;
+    notice?: string;
+  };
+  async function call(input: Input) {
+    const result = await runToolContract(searchRunwaysTool, input);
+    expect(result.isError).toBeFalsy();
+    const text = result.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
+    return { text, structured: result.structuredContent as Structured };
+  }
+  const ids = (structured: Structured) => structured.runways.map((r) => r.runway.id);
+
+  it('returns runways at closed airports for type closed whether the flag is omitted or false', async () => {
+    const opted = await call({ type: 'closed', include_closed_airports: true });
+    expect(ids(opted.structured)).toEqual([245683, 249263]);
+    const inputs: Input[] = [
+      { type: 'closed' },
+      { type: 'closed', include_closed_airports: false },
+    ];
+    for (const input of inputs) {
+      const { text, structured } = await call(input);
+      expect(structured).toEqual(opted.structured);
+      expect(text).toContain('(ident CLOSEDX,');
+    }
+  });
+
+  it('filters by scheduled_service at the airport level on both surfaces', async () => {
+    const us = await call({ country: 'US', scheduled_service: true });
+    expect(ids(us.structured)).toEqual([244323, 244324, 245678, 700100, 245681]);
+    expect(us.structured.totalCount).toBe(5);
+    expect(us.structured.runways.every((r) => r.airport.scheduledService)).toBe(true);
+    expect(us.text.split('**Scheduled service:** yes')).toHaveLength(6);
+    expect(us.text).not.toContain('**Scheduled service:** no');
+    const unscheduled = await call({ country: 'US', scheduled_service: false });
+    expect(unscheduled.structured.totalCount).toBe(0);
+    const closed = await call({ country: 'US', scheduled_service: false, type: 'closed' });
+    expect(ids(closed.structured)).toEqual([245683]);
+  });
+
+  it('rejects a non-boolean scheduled_service at argument validation', async () => {
+    const input = { scheduled_service: 'no' } as unknown as Input;
+    const result = await runToolContract(searchRunwaysTool, input);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ error: { code: -32602 } });
+    expect(JSON.stringify(result.content)).toContain('scheduled_service');
+  });
+
+  it('states that type closed needs no closed-airport flag', () => {
+    expect(searchRunwaysTool.description).toMatch(/type closed/);
+    expect(searchRunwaysTool.input.shape.type.description).toMatch(/include_closed_airports/);
+    expect(searchRunwaysTool.input.shape.include_closed_airports.description).toMatch(
+      /type "?closed"?/,
+    );
+  });
+
+  it.each<[Input, string]>([
+    [
+      { min_length_ft: 99_999, min_width_ft: 999, surface: 'asp' },
+      'No runways matched min_length_ft=99999, min_width_ft=999, surface=asp. Relax filters by shortening surface fragments, lowering min_length_ft or min_width_ft, or opting in to closed airports or runways.',
+    ],
+    [
+      { region: 'US-WA', min_length_ft: 20_000, surface: 'asp' },
+      'No runways matched region=US-WA, min_length_ft=20000, surface=asp. Relax filters by shortening surface fragments, lowering min_length_ft, or opting in to closed airports or runways.',
+    ],
+    [
+      {
+        surface: ['xyz', 'qqq'],
+        min_width_ft: 999,
+        include_closed_airports: true,
+        include_closed_runways: true,
+      },
+      'No runways matched min_width_ft=999, surface=xyz or qqq. Relax filters by shortening surface fragments or lowering min_width_ft.',
+    ],
+    [
+      { scheduled_service: false },
+      'No runways matched scheduled_service=false. Relax filters by dropping scheduled_service or opting in to closed airports or runways.',
+    ],
+    [
+      { type: 'closed', scheduled_service: true },
+      'No runways matched type=closed, scheduled_service=true. Relax filters by dropping type or scheduled_service or opting in to closed runways.',
+    ],
+    [
+      { country: 'PN', include_closed_runways: true },
+      'No runways matched country=PN. Relax filters by opting in to closed airports.',
+    ],
+    [
+      { country: 'PN', type: 'heliport', include_closed_runways: true },
+      'No runways matched country=PN, type=heliport. Relax filters by dropping type.',
+    ],
+    [
+      {
+        latitude: -54.43,
+        longitude: 3.41,
+        radius_km: 20_016,
+        type: 'balloonport',
+        include_closed_airports: true,
+        include_closed_runways: true,
+      },
+      'No runways matched type=balloonport, within 20016 km of -54.43, 3.41. Relax filters by dropping type.',
+    ],
+    [
+      { latitude: 0, longitude: 0, radius_km: 10, lighted: true },
+      'No runways matched lighted=true, within 10 km of 0, 0. Relax filters by dropping lighted, widening radius_km (max 20016), or opting in to closed airports or runways.',
+    ],
+  ])(
+    'names the filters set and only remedies that could add rows for %j',
+    async (input, notice) => {
+      const { text, structured } = await call(input);
+      expect(structured).toMatchObject({ runways: [], totalCount: 0, notice });
+      expect(text).toContain(`> ${notice}`);
+    },
+  );
+});

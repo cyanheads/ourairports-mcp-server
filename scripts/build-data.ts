@@ -1,9 +1,12 @@
 /**
  * @fileoverview Build-time data fetcher. Downloads the six OurAirports CSVs from
  * the daily-updated GitHub mirror and writes them into the package's `data/`
- * directory, which the server loads at setup(). Run this before `bun run build`
- * (and in the Docker build stage / weekly CI rebuild) so the image is
- * self-contained — the server never touches the network at runtime.
+ * directory, which the server loads at setup(), together with `snapshot.json`:
+ * the mirror's deploy time (`sourceLastModified`, which the server reports as
+ * `dataAsOf`) and this fetch's build clock (`fetchedAt`). Run this before
+ * `bun run build`; the Docker build stage runs it, so each image build bundles
+ * the snapshot current at that moment, and the server never touches the network
+ * at runtime.
  *
  * The OurAirports data is dedicated to the public domain; bundling and
  * redistribution are unrestricted (attribution is a courtesy, see README).
@@ -12,7 +15,8 @@
  * // Fetch and bundle the latest CSVs:
  * // bun run scripts/build-data.ts
  *
- * // Verify already-bundled files without downloading:
+ * // Verify already-bundled files, snapshot.json included, without downloading
+ * // (publishing runs this through prepublishOnly):
  * // bun run scripts/build-data.ts --check
  */
 
@@ -24,6 +28,11 @@ import {
   COUNTRY_CODE_PATTERN,
   REGION_CODE_PATTERN,
 } from '../src/services/airport-data/facet-codes.js';
+import {
+  readSnapshot,
+  SNAPSHOT_FILE,
+  type Snapshot,
+} from '../src/services/airport-data/snapshot.js';
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA_DIR = join(ROOT_DIR, 'data');
@@ -82,9 +91,13 @@ function validateFacets(files: ReadonlyMap<string, string>): void {
   });
 }
 
-async function fetchFile(name: string): Promise<string> {
+async function fetchFile(name: string): Promise<{ text: string; lastModified: string | null }> {
   const url = `${MIRROR_BASE}/${name}`;
-  const res = await fetch(url, { headers: { 'user-agent': 'ourairports-mcp-server-build' } });
+  const res = await fetch(url, { headers: { 'user-agent': 'ourairports-mcp-server-build' } }).catch(
+    (err: unknown) => {
+      throw new Error(`Failed to download ${url}: the request did not complete.`, { cause: err });
+    },
+  );
   if (!res.ok) {
     throw new Error(`Failed to download ${url}: HTTP ${res.status} ${res.statusText}`);
   }
@@ -93,7 +106,51 @@ async function fetchFile(name: string): Promise<string> {
   if (!HEADER_SNIFF.test(text)) {
     throw new Error(`Downloaded ${name} does not start with a CSV header row — refusing to write.`);
   }
-  return text;
+  return { text, lastModified: res.headers.get('last-modified') };
+}
+
+/**
+ * One mirror deploy stamps its six files within seconds of each other, and the
+ * mirror deploys once a day, so values further apart than this mixed two deploys.
+ */
+const DEPLOY_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * The mirror's deploy time as ISO 8601 UTC: the latest `Last-Modified` of the
+ * six files. A missing or unparseable header means the bundle cannot be dated,
+ * and values spanning more than `DEPLOY_WINDOW_MS` mean it mixes two deploys (a
+ * CDN edge can serve a pre-deploy copy for minutes after one) — refuse either.
+ */
+function mirrorDeployTime(
+  results: readonly { name: string; lastModified: string | null }[],
+): string {
+  const missing: string[] = [];
+  const times: number[] = [];
+  for (const { name, lastModified } of results) {
+    if (lastModified === null) {
+      missing.push(name);
+      continue;
+    }
+    const time = Date.parse(lastModified);
+    if (Number.isNaN(time)) {
+      throw new Error(
+        `Unparseable Last-Modified "${lastModified}" on ${name} — refusing to write.`,
+      );
+    }
+    times.push(time);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `No Last-Modified header on ${missing.join(', ')}, so the snapshot cannot be dated — refusing to write.`,
+    );
+  }
+  const latest = Math.max(...times);
+  if (latest - Math.min(...times) > DEPLOY_WINDOW_MS) {
+    throw new Error(
+      `The mirror files' Last-Modified values span more than ${DEPLOY_WINDOW_MS / 60_000} minutes (${results.map((r) => `${r.name}: ${r.lastModified}`).join('; ')}), so the fetch mixed two mirror deploys — refusing to write. Run build:data again.`,
+    );
+  }
+  return new Date(latest).toISOString();
 }
 
 async function download(): Promise<void> {
@@ -102,25 +159,32 @@ async function download(): Promise<void> {
 
   const results = await Promise.all(
     FILES.map(async ({ name, minBytes }) => {
-      const text = await fetchFile(name);
+      const { text, lastModified } = await fetchFile(name);
       const bytes = Buffer.byteLength(text, 'utf-8');
       if (bytes < minBytes) {
         throw new Error(
           `Downloaded ${name} is ${bytes} bytes, below the ${minBytes}-byte floor — likely truncated.`,
         );
       }
-      return { name, bytes, text };
+      return { name, bytes, text, lastModified };
     }),
   );
+  const snapshot: Snapshot = {
+    source: `${MIRROR_BASE}/`,
+    sourceLastModified: mirrorDeployTime(results),
+    fetchedAt: new Date().toISOString(),
+  };
 
   validateFacets(new Map(results.map(({ name, text }) => [name, text])));
-  await Promise.all(
-    results.map(({ name, text }) => writeFile(join(DATA_DIR, name), text, 'utf-8')),
-  );
+  await Promise.all([
+    ...results.map(({ name, text }) => writeFile(join(DATA_DIR, name), text, 'utf-8')),
+    writeFile(join(DATA_DIR, SNAPSHOT_FILE), `${JSON.stringify(snapshot, null, 2)}\n`, 'utf-8'),
+  ]);
 
   for (const { name, bytes } of results) {
     console.log(`  ✓ ${name} (${(bytes / 1_048_576).toFixed(2)} MB)`);
   }
+  console.log(`  ✓ ${SNAPSHOT_FILE} (data as of ${snapshot.sourceLastModified})`);
   console.log('Data bundle written.');
 }
 
@@ -158,7 +222,15 @@ async function check(): Promise<void> {
       ),
     ),
   );
-  console.log(`All ${FILES.length} data files present and above size floor.`);
+  const snapshot = await readSnapshot(DATA_DIR);
+  if (!snapshot) {
+    throw new Error(
+      `Missing ${SNAPSHOT_FILE} in ${DATA_DIR}, so the bundle cannot be dated. Run: bun run scripts/build-data.ts`,
+    );
+  }
+  console.log(
+    `All ${FILES.length} data files present and above size floor; data as of ${snapshot.sourceLastModified}.`,
+  );
 }
 
 async function main(): Promise<void> {

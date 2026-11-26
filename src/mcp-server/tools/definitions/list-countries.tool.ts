@@ -10,7 +10,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getAirportDataService } from '@/services/airport-data/airport-data-service.js';
 import { CONTINENTS } from '@/services/airport-data/types.js';
-import { CountryCodeSchema, escapeMarkdown } from './_schemas.js';
+import { CountryCodeSchema, DataAsOfSchema, escapeMarkdown } from './_schemas.js';
 
 const RegionSchema = z
   .object({
@@ -84,6 +84,7 @@ export const listCountriesTool = tool('ourairports_list_countries', {
       .string()
       .optional()
       .describe('Guidance when the country and/or continent filters matched no countries.'),
+    dataAsOf: DataAsOfSchema,
   },
 
   handler(input, ctx) {
@@ -97,6 +98,7 @@ export const listCountriesTool = tool('ourairports_list_countries', {
         `No countries found${input.country ? ` for country "${input.country}"` : ''}${input.continent ? ` in continent "${input.continent}"` : ''}. Call ourairports_list_countries without filters to see all available continents and countries.`,
       );
     }
+    ctx.enrich({ dataAsOf: svc.dataAsOf });
     return {
       countries: countries.map((c) => ({
         code: c.code,
