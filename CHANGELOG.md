@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-11-25 · 🛡️ Security
+
+Filter airports by scheduled airline service, read the data snapshot date as dataAsOf on every result, and fix closed-airport selection, name ranking, and one-word city queries.
+
 ## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-11-10
 
 Page through search results, look up airports by code and navaids by ident, and find runways near a coordinate.
