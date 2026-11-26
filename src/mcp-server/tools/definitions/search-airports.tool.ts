@@ -28,7 +28,7 @@ const orList = new Intl.ListFormat('en', { type: 'disjunction' });
 export const searchAirportsTool = tool('ourairports_search_airports', {
   title: 'Search Airports',
   description:
-    'Search the bundled OurAirports corpus by exact airport code, free text (name, municipality, keywords), and/or facets (country, region, type, scheduled service). All query terms must match. Text supports forward prefixes and common abbreviations such as intl. A query that is one exact code leads with its holders and the airports whose municipality is that word; ranking favors IATA matches, then operational and larger airports. Use ourairports_get_airport for full records by code, ourairports_list_countries for valid country and region codes, and ourairports_find_airports for nearest airports. OurAirports is community-edited — not authoritative for flight operations.',
+    'Search the bundled OurAirports corpus by exact airport code, free text (name, municipality, keywords), and/or facets (country, region, type, scheduled service). All query terms must match. Text supports forward prefixes and common abbreviations such as intl. A query that is one exact code leads with its holders and the airports whose municipality contains that word as a whole word; ranking favors IATA matches, then operational and larger airports. Use ourairports_get_airport for full records by code, ourairports_list_countries for valid country and region codes, and ourairports_find_airports for nearest airports. OurAirports is community-edited — not authoritative for flight operations.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   errors: [

@@ -614,7 +614,8 @@ export class AirportDataService {
     const region = filters.region?.toUpperCase();
     /**
      * A one-word code query leads with a tier of its code holders and the airports
-     * whose municipality is that word; a municipality holder wins a score tie (#38).
+     * whose municipality contains that word as whole tokens; a municipality holder
+     * wins a score tie (#38).
      */
     type Candidate = { airport: Airport; tier: number; score: number; city: number; order: number };
     const compareRank = (
